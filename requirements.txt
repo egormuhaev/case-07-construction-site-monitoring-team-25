@@ -1,0 +1,6 @@
+setuptools>=77,<81
+yolov5==7.0.14
+ultralytics>=8.3.0
+huggingface_hub
+ipykernel
+pillow
