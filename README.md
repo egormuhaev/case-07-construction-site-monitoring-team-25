@@ -16,3 +16,9 @@ https://huggingface.co/uisikdag/yolo-v5-construction-machine-detection
 Архитектура YOLO
 Классы Building Equipment Worker
 https://github.com/ciber-lab/pictor-yolo?ysclid=mu1g7ki1qa494927651
+
+
+## building-facade-segmentation-instance Computer Vision Model:
+https://universe.roboflow.com/building-facade/building-facade-segmentation-instance
+
+
