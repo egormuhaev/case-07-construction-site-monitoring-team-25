@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Парсинг сборников ГЭСН (PDF ФГИС ЦС) в иерархический классификатор работ.
 
 Иерархия класса:
@@ -475,8 +474,7 @@ def parse_one_resource_table(block: str) -> dict[str, dict]:
                 for rate_code, item in assign_sequential(columns, [(values, {})]).items()
                 if item
             }
-            # Sequential fill for sparse machine rows is unreliable; keep only
-            # if the row covers every column or a single leftover column.
+
             if len(values) not in {1, len(columns)}:
                 mapped = {}
         for rate_code, hours in mapped.items():
@@ -937,7 +935,7 @@ def parse_all(input_dir: Path, max_files: int | None = None) -> list[Collection]
         print(f"[{index}/{total}] {path.name}", file=sys.stderr)
         try:
             collections.append(parse_pdf(path, input_dir))
-        except Exception as exc:  # noqa: BLE001 — продолжаем остальные сборники
+        except Exception as exc: 
             print(f"  ошибка: {exc}", file=sys.stderr)
             domain = domain_from_folder(path.parent.name)
             collections.append(
