@@ -1,0 +1,5 @@
+services:
+  db:
+    extends:
+      file: ./deploy/db/db.yml  
+      service: db
