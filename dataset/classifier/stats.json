@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-09-20T13:04:28.859087+00:00",
+  "collections": 118,
+  "tables": 8336,
+  "works": 51441,
+  "collections_without_tables": 0,
+  "by_domain": {
+    "gesnmr": {
+      "name": "Капитальный ремонт оборудования",
+      "collections": 2,
+      "tables": 112,
+      "works": 421
+    },
+    "gesnm": {
+      "name": "Монтаж оборудования",
+      "collections": 40,
+      "tables": 2779,
+      "works": 18727
+    },
+    "gesnp": {
+      "name": "Пусконаладочные работы",
+      "collections": 10,
+      "tables": 686,
+      "works": 2591
+    },
+    "gesnr": {
+      "name": "Ремонтно-строительные работы",
+      "collections": 19,
+      "tables": 613,
+      "works": 3351
+    },
+    "gesn": {
+      "name": "Строительные и специальные строительные работы",
+      "collections": 47,
+      "tables": 4146,
+      "works": 26351
+    }
+  },
+  "labor": {
+    "workers_hours": 45769,
+    "machinists_hours": 37323,
+    "commissioning_hours": 2591,
+    "machines_hours": 40399
+  }
+}
