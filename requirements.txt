@@ -260,3 +260,5 @@ yolov5==7.0.14
 zeep==4.3.3
 zipp==4.1.0
 zxing-cpp==2.2.0
+
+scikit-learn
