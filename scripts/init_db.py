@@ -63,6 +63,7 @@ WORK_COLUMNS = (
     "machine_hours",
 )
 APP_TABLES = (
+    "classifier_vector",
     "detected_class_machine",
     "detected_classes",
     "work_classifier",
