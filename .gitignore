@@ -3,3 +3,4 @@ weights
 .DS_Store
 .idea
 .DS_Store
+__pycache__

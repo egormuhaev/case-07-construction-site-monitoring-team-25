@@ -1,5 +1,8 @@
 services:
   db:
     extends:
-      file: ./deploy/db/db.yml  
+      file: ./deploy/db/db.yml
       service: db
+
+volumes:
+  monitoring_db_data:
