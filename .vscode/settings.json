@@ -1,0 +1,36 @@
+{
+  "files.watcherExclude": {
+    "**/.venv/**": true,
+    "**/dataset/**": true,
+    "**/weights/**": true,
+    "**/__pycache__/**": true,
+    "**/*.egg-info/**": true
+  },
+  "search.exclude": {
+    "**/.venv": true,
+    "**/dataset": true,
+    "**/weights": true,
+    "**/__pycache__": true
+  },
+  "files.exclude": {
+    "**/.venv": true,
+    "**/weights": true,
+    "**/__pycache__": true
+  },
+  "python.analysis.diagnosticMode": "openFilesOnly",
+  "python.analysis.indexing": false,
+  "python.analysis.typeCheckingMode": "off",
+  "python.analysis.exclude": [
+    "**/.venv/**",
+    "**/dataset/**",
+    "**/weights/**"
+  ],
+  "basedpyright.analysis.diagnosticMode": "openFilesOnly",
+  "basedpyright.analysis.indexing": false,
+  "basedpyright.analysis.typeCheckingMode": "off",
+  "basedpyright.analysis.exclude": [
+    "**/.venv/**",
+    "**/dataset/**",
+    "**/weights/**"
+  ]
+}

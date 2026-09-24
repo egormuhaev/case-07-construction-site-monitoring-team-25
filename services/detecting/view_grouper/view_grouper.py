@@ -35,6 +35,6 @@ def view_grouper(dataset: ImageDataset) -> ImageDataset:
     reduced_embeddings = reduce_embeddings(np.vstack(all_embeddings), PCA_COMPONENTS)
     labels = clustering(reduced_embeddings)
 
-    dataset.set_labels(labels)
+    dataset.set_labels(labels.tolist())
 
     return dataset

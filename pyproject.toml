@@ -39,6 +39,19 @@ include = ["detecting*"]
 
 [tool.pyright]
 extraPaths = ["services"]
+venvPath = "."
+venv = ".venv"
+exclude = [
+    "**/.venv",
+    "**/dataset",
+    "**/weights",
+    "**/__pycache__",
+    "**/.eggs",
+    "**/build",
+    "**/dist",
+]
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]
 pythonpath = ["services"]
