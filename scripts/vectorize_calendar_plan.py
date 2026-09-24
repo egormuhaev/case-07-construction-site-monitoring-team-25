@@ -4,10 +4,6 @@ import numpy as np
 import psycopg
 from sentence_transformers import SentenceTransformer
 
-ROWS_LIMIT = 10
-
-# получить данные из таблицы
-
 
 def connect() -> psycopg.Connection:
     return psycopg.connect(
@@ -23,42 +19,24 @@ def vector_literal(vector: np.ndarray) -> str:
     return "[" + ",".join(format(float(value), ".8g") for value in vector) + "]"
 
 
-# получить из БД классификатор
-
-classifiers = []
+works = []
 
 with connect() as conn:
     with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-        cur.execute(
-            "SELECT * FROM work_classifier LIMIT %s",
-            (ROWS_LIMIT,),
-        )
+        cur.execute("SELECT id, name FROM work ORDER BY position")
         for row in cur.fetchall():
-            classifiers.append(row)
+            works.append(row)
 
-# векторизировать названия работ
+work_names = [{"id": row["id"], "name": row["name"]} for row in works]
 
-classsifier_names = []
-
-for row in classifiers:
-    id = row["id"]
-    sphere = row["sphere"]
-    collection = row["collection"]
-    section = row["section"]
-    subsection = row["subsection"]
-    table_name = row["table_name"]
-    work_name = row["work_name"]
-
-    parts = [row["sphere"], row["collection"], row["section"],
-             row["subsection"], row["table_name"], row["work_name"]]
-    name = " -> ".join(part for part in parts if part)
-
-    classsifier_names.append({"id": id, "name": name})
+if not work_names:
+    print("В work нет работ")
+    raise SystemExit(0)
 
 model = SentenceTransformer(
     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
-names = [item["name"] for item in classsifier_names]
+names = [item["name"] for item in work_names]
 embeddings = np.ascontiguousarray(
     model.encode(
         names,
@@ -67,21 +45,21 @@ embeddings = np.ascontiguousarray(
     ),
     dtype=np.float32,
 )
-for item, vector in zip(classsifier_names, embeddings):
+for item, vector in zip(work_names, embeddings):
     item["vector"] = vector
 
 with connect() as conn:
     with conn.cursor() as cur:
         cur.executemany(
             """
-            INSERT INTO classifier_vector (classifier_id, vector)
+            INSERT INTO work_vector (work_id, vector)
             VALUES (%s, %s::vector)
-            ON CONFLICT (classifier_id) DO UPDATE SET vector = EXCLUDED.vector
+            ON CONFLICT (work_id) DO UPDATE SET vector = EXCLUDED.vector
             """,
             [
                 (item["id"], vector_literal(item["vector"]))
-                for item in classsifier_names
+                for item in work_names
             ],
         )
 
-print(f"записано: {len(classsifier_names)}")
+print(f"В work_vector добавлено: {len(work_names)} записей")

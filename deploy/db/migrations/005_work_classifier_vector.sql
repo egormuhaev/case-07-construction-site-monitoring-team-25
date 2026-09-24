@@ -1,0 +1,4 @@
+ALTER TABLE classifier_vector RENAME TO work_classifier_vector;
+
+ALTER INDEX classifier_vector_pkey RENAME TO work_classifier_vector_pkey;
+ALTER INDEX classifier_vector_classifier_id_key RENAME TO work_classifier_vector_classifier_id_key;

@@ -13,6 +13,8 @@ dependencies = [
     "hdbscan",
     "ijson",
     "ipykernel",
+    "JPype1",
+    "mpxj",
     "numpy",
     "openpyxl",
     "pillow",
