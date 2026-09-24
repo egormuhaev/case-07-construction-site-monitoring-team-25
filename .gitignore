@@ -2,5 +2,15 @@
 weights
 .DS_Store
 .idea
-.DS_Store
-__pycache__
+.vscode
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.ipynb_checkpoints/
+.env
+.python-version

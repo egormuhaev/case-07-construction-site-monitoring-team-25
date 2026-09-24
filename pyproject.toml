@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monitoring-construction-site"
+version = "0.1.0"
+description = "Мониторинг строительной площадки: детекция и группировка ракурсов"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "faiss-cpu",
+    "hdbscan",
+    "ijson",
+    "ipykernel",
+    "numpy",
+    "openpyxl",
+    "pillow",
+    "polars",
+    "psycopg[binary]",
+    "pypdfium2",
+    "scikit-learn",
+    "sentence-transformers",
+    "torch",
+    "torchvision",
+    "tqdm",
+    "transformers",
+    "ultralytics",
+]
+
+[project.scripts]
+detecting = "detecting.main:main"
+
+[tool.setuptools.packages.find]
+where = ["services"]
+include = ["detecting*"]
+
+[tool.pyright]
+extraPaths = ["services"]
+
+[tool.pytest.ini_options]
+pythonpath = ["services"]
