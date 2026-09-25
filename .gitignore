@@ -15,3 +15,10 @@ build/
 .ipynb_checkpoints/
 .env
 .python-version
+
+node_modules/
+orchestrator/dist
+shared/workflows/
+shared/.idempotency/
+
+

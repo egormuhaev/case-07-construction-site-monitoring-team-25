@@ -66,6 +66,33 @@ python scripts/init_db.py --reset      # удалить таблицы и зал
 
 Параметры подключения по умолчанию: `localhost:5432`, пользователь `admin`, БД `monitoring_db`. Их можно переопределить переменными `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`.
 
+### Docker Compose
+
+Единый Compose-файл находится в корне репозитория. Запуск инфраструктуры и
+оркестратора:
+
+```bash
+docker compose up --build -d
+```
+
+Только основной PostgreSQL:
+
+```bash
+docker compose up -d db
+```
+
+Только оркестратор и его зависимости:
+
+```bash
+docker compose up --build -d postgres redis orchestrator
+```
+
+Последовательность внешних сервисов задаётся в
+`orchestrator/orchestrator/config/pipeline.json`. Каждый сервис должен находиться
+в общей Docker Compose сети, монтировать `./orchestrator/shared` в `/data` и
+поддерживать асинхронный контракт `POST /jobs` + `GET /jobs/{jobId}`. Полная
+инструкция находится в `orchestrator/README.md`.
+
 **Классификатор работ** из PDF ГЭСН:
 
 ```
