@@ -16,3 +16,10 @@ build/
 .env
 .python-version
 reports/
+
+node_modules/
+orchestrator/dist
+shared/workflows/
+shared/.idempotency/
+
+
