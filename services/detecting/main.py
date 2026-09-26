@@ -4,6 +4,7 @@ from pathlib import Path
 
 from detecting.build_report import BuildReport
 from detecting.config import DATASET_DAY, DAY_END, DAY_START, TEST_DATASET_DIR
+from detecting.log import configure_logging, dataset_summary, get_logger, stage
 from detecting.cv import (
     CropClassifier,
     CropGroupClassifier,
@@ -17,6 +18,7 @@ from detecting.model import Image, ImageDataset
 from detecting.view_grouper import view_grouper
 
 CLASSIFIER = "clip"
+logger = get_logger("main")
 
 
 def get_images() -> list[Image]:
@@ -66,8 +68,13 @@ def _spread_times(count: int) -> list[time]:
 
 
 def main() -> None:
-    dataset = ImageDataset(images=get_images())
-    view_grouper(dataset)
+    configure_logging()
+    logger.info("старт, каталог %s", TEST_DATASET_DIR)
+    with stage("загрузка изображений", logger):
+        dataset = ImageDataset(images=get_images())
+    logger.info("загружено %d кадров", len(dataset.images))
+    with stage("группировка ракурсов", logger):
+        view_grouper(dataset)
     DetectingPipeline(
         [
             HazardDetector(),
@@ -76,15 +83,10 @@ def main() -> None:
         resolver=DetectionResolver(),
         classifier=CropWorldClassifier(),
     ).run(dataset)
-    BuildReport(dataset).build()
-
-
-# def _crop_classifier() -> CropClassifier:
-#     if CLASSIFIER == "world":
-#         return CropWorldClassifier()
-#     if CLASSIFIER == "clip":
-#         return CropGroupClassifier()
-#     raise ValueError(f"Неизвестный классификатор: {CLASSIFIER}")
+    with stage("отчёт", logger):
+        report = BuildReport(dataset).build()
+    logger.info("отчёт: %s", report)
+    logger.info("готово: %s", dataset_summary(dataset))
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFont
 
 from .config import REPORT_DIR
+from .log import get_logger
 from .model import DetectedObject, Image, ImageDataset
 from .model.equipment_group import (
     GROUP_BY_CODE,
@@ -17,6 +18,7 @@ from .model.equipment_group import (
 PERSON_COLOR = (46, 204, 113)
 EQUIPMENT_COLOR = (241, 196, 15)
 SPECIFIC_COLOR = (52, 152, 219)
+logger = get_logger("report")
 
 
 class BuildReport:
@@ -38,6 +40,7 @@ class BuildReport:
 
         index_path = self.output_dir / "index.html"
         index_path.write_text(_page_html(cards), encoding="utf-8")
+        logger.info("отчёт записан: %s (%d кадров)", index_path, len(cards))
         return index_path
 
     def _annotate(self, image: Image, destination: Path) -> None:

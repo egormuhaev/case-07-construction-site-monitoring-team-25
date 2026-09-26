@@ -3,6 +3,9 @@ from pathlib import Path
 from huggingface_hub import snapshot_download
 
 from .config import WEIGHTS_DIR
+from .log import get_logger
+
+logger = get_logger("weights")
 
 
 def load_model(model_id: str, filename: str | None = None) -> Path:
@@ -10,11 +13,14 @@ def load_model(model_id: str, filename: str | None = None) -> Path:
     target = model_dir / filename if filename else model_dir
 
     if filename and target.is_file():
+        logger.info("веса уже есть: %s", target)
         return target
     if filename is None and _is_downloaded(model_dir):
+        logger.info("веса уже есть: %s", model_dir)
         return model_dir
 
     model_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("скачивание модели %s → %s", model_id, target)
     snapshot_download(
         repo_id=model_id,
         local_dir=str(model_dir),
@@ -26,7 +32,7 @@ def load_model(model_id: str, filename: str | None = None) -> Path:
     if filename is None and not _is_downloaded(model_dir):
         raise FileNotFoundError(f"Не удалось скачать модель {model_id} в {model_dir}")
 
-    print(f"Модель {model_id} загружена по пути: {target}")
+    logger.info("модель %s загружена: %s", model_id, target)
     return target
 
 
