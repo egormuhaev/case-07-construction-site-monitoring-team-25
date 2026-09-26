@@ -28,6 +28,7 @@ dependencies = [
     "tqdm",
     "transformers",
     "ultralytics",
+    "yolov5",
 ]
 
 [project.scripts]

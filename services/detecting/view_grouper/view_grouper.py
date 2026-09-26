@@ -4,15 +4,20 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ..config import EMBED_BATCH_SIZE, EMBED_MODEL_ID, PCA_COMPONENTS, get_device
-from ..model import ImageDataset
+from ..model import ImageDataset, DataloaderAdapter
 from .clustering import clustering
 from .embedding import embedding_model, reduce_embeddings
 
 
 def view_grouper(dataset: ImageDataset) -> ImageDataset:
     device = get_device()
+
+
     dataloader = DataLoader(
-        dataset, batch_size=EMBED_BATCH_SIZE, shuffle=False, num_workers=0
+        DataloaderAdapter(dataset), 
+        batch_size=EMBED_BATCH_SIZE, 
+        shuffle=False, 
+        num_workers=0
     )
 
     model = embedding_model(model_id=EMBED_MODEL_ID)
