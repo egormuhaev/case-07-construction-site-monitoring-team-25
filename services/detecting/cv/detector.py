@@ -57,6 +57,7 @@ class Detector(ABC):
         conf: float,
         raw_class_id: int,
     ) -> None:
+        classified = mapping.group != UNKNOWN_EQUIPMENT_CODE
         image.objects.append(
             DetectedObject(
                 model_id=self.model_id,
@@ -67,6 +68,8 @@ class Detector(ABC):
                 group=mapping.group,
                 conf=conf,
                 needs_refinement=mapping.needs_refinement,
+                classification_source=self.model_id if classified else None,
+                classification_confidence=conf if classified else None,
                 evidence=[
                     DetectionEvidence(
                         model_id=self.model_id,

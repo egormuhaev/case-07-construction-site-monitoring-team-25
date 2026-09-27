@@ -92,6 +92,7 @@ def _merge_objects(left: DetectedObject, right: DetectedObject) -> DetectedObjec
         weight_right = right.conf / total_conf
 
     primary = left if left.conf >= right.conf else right
+    source, class_conf = _merge_classification(left, right, group, needs_refinement)
     return DetectedObject(
         model_id=primary.model_id,
         x1=left.x1 * weight_left + right.x1 * weight_right,
@@ -101,6 +102,8 @@ def _merge_objects(left: DetectedObject, right: DetectedObject) -> DetectedObjec
         group=group,
         conf=max(left.conf, right.conf),
         needs_refinement=needs_refinement,
+        classification_source=source,
+        classification_confidence=class_conf,
         evidence=[*left.evidence, *right.evidence],
     )
 
@@ -120,3 +123,22 @@ def _resolve_groups(left: DetectedObject, right: DetectedObject) -> tuple[str, b
     if right_known:
         return right.group, False
     return UNKNOWN_EQUIPMENT_CODE, True
+
+
+def _merge_classification(
+    left: DetectedObject,
+    right: DetectedObject,
+    group: str,
+    needs_refinement: bool,
+) -> tuple[str | None, float | None]:
+    if needs_refinement or group == UNKNOWN_EQUIPMENT_CODE:
+        return None, None
+    candidates = [
+        obj
+        for obj in (left, right)
+        if obj.group == group and obj.classification_source is not None
+    ]
+    if not candidates:
+        return None, None
+    picked = max(candidates, key=lambda obj: obj.classification_confidence or 0.0)
+    return picked.classification_source, picked.classification_confidence

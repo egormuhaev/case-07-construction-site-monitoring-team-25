@@ -24,6 +24,8 @@ class CropWorldClassifier:
         self.group_codes: list[str] = []
 
     def load_model(self) -> None:
+        if self.model is not None:
+            return
         self.model = YOLO(str(load_model(CV_MODEL_3, WEIGHTS_FILE)))
         groups = [group for group in GROUPS if group.code != UNKNOWN_EQUIPMENT_CODE]
         self.group_codes = [group.code for group in groups]
@@ -89,3 +91,5 @@ class CropWorldClassifier:
             return
         obj.group = self.group_codes[best_class_id]
         obj.needs_refinement = False
+        obj.classification_source = "yolo-world"
+        obj.classification_confidence = best_conf

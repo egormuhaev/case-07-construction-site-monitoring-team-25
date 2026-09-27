@@ -1,13 +1,13 @@
+import json
 import os
 from datetime import datetime, time
 from pathlib import Path
 
 from detecting.build_report import BuildReport
 from detecting.config import DATASET_DAY, DAY_END, DAY_START, TEST_DATASET_DIR
-from detecting.log import configure_logging, dataset_summary, get_logger, stage
+from detecting.export import dataset_to_dict
+from detecting.log import configure_logging, dataset_summary, get_logger, object_count, stage
 from detecting.cv import (
-    CropClassifier,
-    CropGroupClassifier,
     CropWorldClassifier,
     DetectingPipeline,
     DetectionResolver,
@@ -83,6 +83,13 @@ def main() -> None:
         resolver=DetectionResolver(),
         classifier=CropWorldClassifier(),
     ).run(dataset)
+    payload = dataset_to_dict(dataset)
+    logger.info(
+        "JSON: %d кадров, %d объектов",
+        len(payload["frames"]),
+        object_count(dataset),
+    )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     with stage("отчёт", logger):
         report = BuildReport(dataset).build()
     logger.info("отчёт: %s", report)

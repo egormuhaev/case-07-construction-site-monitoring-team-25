@@ -9,18 +9,8 @@ description = "Мониторинг строительной площадки: �
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
-    "faiss-cpu",
-    "hdbscan",
-    "ijson",
-    "ipykernel",
-    "JPype1",
-    "mpxj",
     "numpy",
-    "openpyxl",
     "pillow",
-    "polars",
-    "psycopg[binary]",
-    "pypdfium2",
     "scikit-learn",
     "sentence-transformers",
     "torch",
@@ -29,6 +19,25 @@ dependencies = [
     "transformers",
     "ultralytics",
     "yolov5",
+    "hdbscan",
+    "fastapi",
+    "uvicorn[standard]",
+    "redis",
+    "pydantic-settings",
+    "httpx",
+]
+
+[project.optional-dependencies]
+calendar = [
+    "faiss-cpu",
+    "ijson",
+    "ipykernel",
+    "JPype1",
+    "mpxj",
+    "openpyxl",
+    "polars",
+    "psycopg[binary]",
+    "pypdfium2",
 ]
 
 [project.scripts]

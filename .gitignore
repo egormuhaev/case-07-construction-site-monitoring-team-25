@@ -1,5 +1,6 @@
 .venv
 weights
+.cache
 .DS_Store
 .idea
 .vscode/*

@@ -21,6 +21,8 @@ class HazardDetector(Detector):
     weights_file = WEIGHTS_FILE
 
     def load_model(self) -> None:
+        if self.model is not None:
+            return
         self.model = YOLO(str(self.weights_path()))
 
     def detect(self, dataset: ImageDataset) -> None:

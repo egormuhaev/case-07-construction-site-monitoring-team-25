@@ -4,25 +4,12 @@ services:
       file: ./deploy/db/db.yml
       service: db
 
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: orchestrator
-      POSTGRES_USER: orchestrator
-      POSTGRES_PASSWORD: orchestrator
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U orchestrator -d orchestrator"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
@@ -37,7 +24,7 @@ services:
       context: ./orchestrator/orchestrator
     environment:
       PORT: 3000
-      POSTGRES_HOST: postgres
+      POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       POSTGRES_DB: orchestrator
       POSTGRES_USER: orchestrator
@@ -60,12 +47,46 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
       redis:
         condition: service_healthy
 
+  detecting:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/detecting/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DETECTING_REDIS_HOST: redis
+      DETECTING_DATA_DIR: /data
+      DETECTING_WEIGHTS_DIR: /weights
+      DETECTING_CACHE_DIR: /cache
+    volumes:
+      - ./orchestrator/shared:/data
+      - detecting-weights:/weights
+      - detecting-cache:/cache
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
 volumes:
   monitoring_db_data:
-  postgres-data:
   redis-data:
+  detecting-weights:
+  detecting-cache:

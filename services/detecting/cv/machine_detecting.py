@@ -77,6 +77,8 @@ class MachineDetector(Detector):
     weights_file = WEIGHTS_FILE
 
     def load_model(self) -> None:
+        if self.model is not None:
+            return
         device = "cpu" if get_device().type == "mps" else str(get_device())
         model: Any = yolov5.load(str(self.weights_path()), device=device)
         model.conf = CONF

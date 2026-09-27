@@ -3,14 +3,14 @@
 COMPOSE = docker compose -f ../docker-compose.yml
 
 up:
-	$(COMPOSE) up --build -d postgres redis orchestrator
+	$(COMPOSE) up --build -d db redis orchestrator
 
 down:
-	$(COMPOSE) down postgres redis orchestrator
+	$(COMPOSE) down db redis orchestrator
 
 logs:
 	$(COMPOSE) logs -f orchestrator
 
 reset:
-	$(COMPOSE) down -v postgres redis orchestrator
+	$(COMPOSE) down -v db redis orchestrator
 	rm -rf shared/workflows shared/.idempotency

@@ -22,4 +22,6 @@ class DetectedObject:
     group: str
     conf: float
     needs_refinement: bool = False
+    classification_source: str | None = None
+    classification_confidence: float | None = None
     evidence: list[DetectionEvidence] = field(default_factory=list)

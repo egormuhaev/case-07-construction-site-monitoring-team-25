@@ -16,9 +16,15 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-После этого импортируется пакет `detecting`, а в PATH появляется команда `detecting`.
+После этого импортируется пакет `detecting`, а в PATH появляется команда `detecting`. Для скриптов календарного плана и БД:
 
-Новая библиотека — в `dependencies` в `pyproject.toml`, потом снова `pip install -e .`.
+```
+pip install -e ".[calendar]"
+```
+
+Образ `detecting` ставит CPU-сборку `torch`/`torchvision` и только runtime сервиса, без extra `calendar`.
+
+Новая библиотека сервиса — в `dependencies` в `pyproject.toml`, потом снова `pip install -e .`. Зависимости скриптов плана — в extra `calendar`.
 
 ### Структура
 
@@ -84,8 +90,10 @@ docker compose up -d db
 Только оркестратор и его зависимости:
 
 ```bash
-docker compose up --build -d postgres redis orchestrator
+docker compose up --build -d db redis orchestrator
 ```
+
+Сервис `detecting` в том же compose поднимает API детекции: образ ставит CPU-`torch` и зависимости сервиса, без extra `calendar`.
 
 Последовательность внешних сервисов задаётся в
 `orchestrator/orchestrator/config/pipeline.json`. Каждый сервис должен находиться
