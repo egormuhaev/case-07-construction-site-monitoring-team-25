@@ -23,14 +23,24 @@ works = []
 
 with connect() as conn:
     with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-        cur.execute("SELECT id, name FROM work ORDER BY position")
+        cur.execute(
+            """
+            SELECT n.work_id, n.normalized_name
+            FROM work_normalized n
+            JOIN work w ON w.id = n.work_id
+            ORDER BY w.position
+            """
+        )
         for row in cur.fetchall():
             works.append(row)
 
-work_names = [{"id": row["id"], "name": row["name"]} for row in works]
+work_names = [
+    {"id": row["work_id"], "name": row["normalized_name"]}
+    for row in works
+]
 
 if not work_names:
-    print("В work нет работ")
+    print("В work_normalized нет записей")
     raise SystemExit(0)
 
 model = SentenceTransformer(
@@ -52,12 +62,14 @@ with connect() as conn:
     with conn.cursor() as cur:
         cur.executemany(
             """
-            INSERT INTO work_vector (work_id, vector)
-            VALUES (%s, %s::vector)
-            ON CONFLICT (work_id) DO UPDATE SET vector = EXCLUDED.vector
+            INSERT INTO work_vector (work_id, embedding_name, vector)
+            VALUES (%s, %s, %s::vector)
+            ON CONFLICT (work_id) DO UPDATE SET
+                embedding_name = EXCLUDED.embedding_name,
+                vector = EXCLUDED.vector
             """,
             [
-                (item["id"], vector_literal(item["vector"]))
+                (item["id"], item["name"], vector_literal(item["vector"]))
                 for item in work_names
             ],
         )

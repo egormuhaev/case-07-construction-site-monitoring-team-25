@@ -63,10 +63,14 @@ WORK_COLUMNS = (
     "machine_hours",
 )
 APP_TABLES = (
+    "work_classifier_rerank",
+    "work_classifier_tree",
     "work_work_classifier",
     "work_vector",
+    "work_normalized",
     "work",
     "work_classifier_vector",
+    "work_classifier_normalized",
     "detected_class_machine",
     "detected_classes",
     "work_classifier",

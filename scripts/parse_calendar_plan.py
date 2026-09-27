@@ -1,8 +1,8 @@
 """Разобрать календарный план MS Project (.mpp) через MPXJ и записать работы в work.
 
-  python scripts/parse_calendar_plan.py
-  python scripts/parse_calendar_plan.py --dry-run
-  python scripts/parse_calendar_plan.py --input dataset/documents/Calendar-plan.mpp
+  python3 scripts/parse_calendar_plan.py
+  python3 scripts/parse_calendar_plan.py --dry-run
+  python3 scripts/parse_calendar_plan.py --input dataset/documents/Calendar-plan.mpp
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 import jpype
-import mpxj  # noqa: F401 — подключает jar-файлы MPXJ к classpath JVM
+import mpxj
 import psycopg
 from psycopg import sql
 
@@ -69,6 +69,8 @@ WORK_COLUMNS = (
     "resources",
     "guid",
 )
+
+# описание типов возвращаемых значений mpxj
 
 
 @dataclass
@@ -188,6 +190,7 @@ def hours_unit() -> object:
 
 
 def as_text(value: object | None) -> str | None:
+    """Парсит текст"""
     if value is None:
         return None
     text = str(value).strip()
@@ -195,6 +198,7 @@ def as_text(value: object | None) -> str | None:
 
 
 def as_datetime(value: datetime | JavaDateTime | None) -> datetime | None:
+    """Парсит время"""
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -210,6 +214,7 @@ def as_datetime(value: datetime | JavaDateTime | None) -> datetime | None:
 
 
 def as_hours(duration: JavaDuration | None, defaults: object) -> float | None:
+    """Превращает продолжительность в часы"""
     if duration is None:
         return None
     converted = duration.convertUnits(hours_unit(), defaults)
@@ -217,6 +222,7 @@ def as_hours(duration: JavaDuration | None, defaults: object) -> float | None:
 
 
 def format_lag(lag: JavaDuration | None) -> str:
+    """Парсит задержки внутри увязки"""
     if lag is None or lag.getDuration() == 0:
         return ""
     amount = lag.getDuration()
@@ -227,6 +233,7 @@ def format_lag(lag: JavaDuration | None) -> str:
 
 
 def format_predecessors(task: JavaTask) -> str | None:
+    """Парсит увязки"""
     parts: list[str] = []
     for relation in task.getPredecessors() or []:
         target = relation.getTargetTask()
@@ -240,6 +247,7 @@ def format_predecessors(task: JavaTask) -> str | None:
 
 
 def format_resources(task: JavaTask) -> str | None:
+    """Парсит ресурсы задачи"""
     names: list[str] = []
     for assignment in task.getResourceAssignments() or []:
         resource = assignment.getResource()
@@ -252,6 +260,7 @@ def format_resources(task: JavaTask) -> str | None:
 
 
 def task_path(task: JavaTask) -> str:
+    """Парсит путь к задаче от начала проекта"""
     names: list[str] = []
     current: JavaTask | None = task
     seen: set[int] = set()
@@ -269,6 +278,7 @@ def task_path(task: JavaTask) -> str:
 
 
 def parse_task(task: JavaTask, position: int, defaults: object) -> Work | None:
+    """Парсит задачу из проекта"""
     name = as_text(task.getName())
     if not name:
         return None
@@ -297,13 +307,14 @@ def parse_task(task: JavaTask, position: int, defaults: object) -> Work | None:
 
 
 def parse_project(path: Path) -> list[Work]:
+    """Парсит .mpp файл через библиотеку mpxj"""
     ensure_jvm()
     reader = jpype.JClass("org.mpxj.reader.UniversalProjectReader")()
     project = cast(JavaProject, reader.read(str(path)))
     defaults = project.getProjectProperties()
     works: list[Work] = []
     for task in project.getTasks():
-        if task is None:
+        if task is None or task.getID() == 0:
             continue
         parsed = parse_task(task, len(works), defaults)
         if parsed is not None:
@@ -312,6 +323,7 @@ def parse_project(path: Path) -> list[Work]:
 
 
 def source_label(path: Path) -> str:
+    """Возвращает путь к файлу от корня проекта"""
     try:
         return path.resolve().relative_to(ROOT).as_posix()
     except ValueError:
@@ -319,6 +331,7 @@ def source_label(path: Path) -> str:
 
 
 def connect() -> psycopg.Connection:
+    """Подключение к БД"""
     return psycopg.connect(
         host=os.environ.get("POSTGRES_HOST", "localhost"),
         port=os.environ.get("POSTGRES_PORT", "5432"),
@@ -330,6 +343,7 @@ def connect() -> psycopg.Connection:
 
 
 def work_insert() -> sql.Composed:
+    """Запись работ в БД"""
     columns = sql.SQL(", ").join(sql.Identifier(column)
                                  for column in WORK_COLUMNS)
     values = sql.SQL(", ").join(sql.Placeholder() for _ in WORK_COLUMNS)
@@ -349,7 +363,8 @@ def work_insert() -> sql.Composed:
     ).format(columns=columns, values=values, updates=updates)
 
 
-def save_works(works: list[Work], source_file: str) -> int:
+def replace_works(works: list[Work], source_file: str) -> int:
+    """Запись работ в БД с полным удалением всех предыдущих записей"""
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM work")
@@ -363,6 +378,7 @@ def save_works(works: list[Work], source_file: str) -> int:
 
 
 def print_works(works: list[Work]) -> None:
+    """Вывод в терминал работ"""
     for work in works:
         if work.is_summary:
             kind = "суммарная"
@@ -378,16 +394,18 @@ def print_works(works: list[Work]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Получение входных аргументов скрипта"""
     parser = argparse.ArgumentParser(
         description="Разобрать календарный план MS Project и записать работы в work")
     parser.add_argument("--input", type=Path,
-                        default=DEFAULT_INPUT, help="Файл .mpp")
+                        default=DEFAULT_INPUT, help="Файл .mpp для разбора")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Только разобрать файл, в базу не писать")
+                        help="Парсинг файла без записи в БД")
     return parser.parse_args()
 
 
 def main() -> int:
+    """Корневой скрипт запуска парсинга"""
     args = parse_args()
     path = args.input
     if not path.is_file():
@@ -401,7 +419,7 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    saved = save_works(works, label)
+    saved = replace_works(works, label)
     log(f"В work записано: {saved}")
     return 0
 

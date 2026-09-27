@@ -1,10 +1,11 @@
-"""Сопоставить работы календарного плана с классификатором по векторам.
+"""Сопоставить работы плана с классификатором по векторам.
 
-Для каждой записи work_vector ищет ближайший вектор в work_classifier_vector
-и записывает пару в work_work_classifier: название и данные нормы,
-даты и поля работы из календарного плана.
+Для каждой записи work_vector ищет ближайший вектор в work_classifier_vector.
+Сравниваются названия из embedding_name: те, что были векторизованы.
+Пара попадает в work_work_classifier, только если косинусная близость
+не ниже MIN_SCORE.
 
-  python scripts/classify-calendar-plan.py
+  python scripts/classify_calendar_plan.py
 """
 
 from __future__ import annotations
@@ -64,6 +65,8 @@ INSERT_COLUMNS = (
 )
 # Память матрицы близости: число работ × размер блока × 4 байта.
 CLASSIFIER_BLOCK = 4096
+# Косинусная близость нормированных векторов. Ниже порога пару не записываем.
+MIN_SCORE = 0.45
 
 
 def connect() -> psycopg.Connection:
@@ -110,6 +113,7 @@ def load_rows(conn: psycopg.Connection) -> tuple[list[dict], list[dict]]:
             """
             SELECT
                 wv.work_id,
+                wv.embedding_name,
                 wv.vector::text AS vector,
                 w.source_file AS plan_source_file,
                 w.unique_id AS plan_unique_id,
@@ -141,6 +145,7 @@ def load_rows(conn: psycopg.Connection) -> tuple[list[dict], list[dict]]:
             """
             SELECT
                 cv.classifier_id,
+                cv.embedding_name,
                 cv.vector::text AS vector,
                 c.work_name AS classifier_work_name,
                 c.sphere AS classifier_sphere,
@@ -168,21 +173,33 @@ def load_rows(conn: psycopg.Connection) -> tuple[list[dict], list[dict]]:
     return works, classifiers
 
 
-def match_rows(works: list[dict], classifiers: list[dict]) -> list[tuple]:
+def match_line(score: float, work: dict, classifier: dict) -> str:
+    return f"{score:.3f}  {work['embedding_name']}  ->  {classifier['embedding_name']}"
+
+
+def match_rows(
+    works: list[dict], classifiers: list[dict]
+) -> tuple[list[tuple], list[str], list[str]]:
     indexes, scores = nearest(vectors_matrix(works), vectors_matrix(classifiers))
-    rows: list[tuple] = []
+    accepted: list[tuple] = []
+    accepted_lines: list[str] = []
+    rejected_lines: list[str] = []
     for work, index, score in zip(works, indexes, scores):
         classifier = classifiers[int(index)]
-        rows.append(
-            (
-                work["work_id"],
-                classifier["classifier_id"],
-                float(score),
-                *(classifier[column] for column in CLASSIFIER_COLUMNS),
-                *(work[column] for column in PLAN_COLUMNS),
-            )
+        value = float(score)
+        row = (
+            work["work_id"],
+            classifier["classifier_id"],
+            value,
+            *(classifier[column] for column in CLASSIFIER_COLUMNS),
+            *(work[column] for column in PLAN_COLUMNS),
         )
-    return rows
+        if value >= MIN_SCORE:
+            accepted.append(row)
+            accepted_lines.append(match_line(value, work, classifier))
+        else:
+            rejected_lines.append(f"{match_line(value, work, classifier)}  ниже порога")
+    return accepted, accepted_lines, rejected_lines
 
 
 def save_matches(conn: psycopg.Connection, rows: list[tuple]) -> None:
@@ -206,12 +223,15 @@ if not classifiers:
     print("В work_classifier_vector нет записей")
     raise SystemExit(0)
 
-matches = match_rows(works, classifiers)
+accepted, accepted_lines, rejected_lines = match_rows(works, classifiers)
 
 with connect() as conn:
-    save_matches(conn, matches)
+    save_matches(conn, accepted)
 
-for work, row in zip(works, matches):
-    print(f"{row[2]:.3f}  {work['plan_name']}  ->  {row[3]}")
+for line in accepted_lines:
+    print(line)
+for line in rejected_lines:
+    print(line)
 
-print(f"В work_work_classifier записано: {len(matches)}")
+print(f"В work_work_classifier записано: {len(accepted)}")
+print(f"Пропущено ниже порога: {len(rejected_lines)}")
