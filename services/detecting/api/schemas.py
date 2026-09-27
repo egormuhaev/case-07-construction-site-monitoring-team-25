@@ -10,6 +10,7 @@ class FrameInput(BaseModel):
     path: str
     captured_date: date
     captured_time: time
+    camera: str | None = None
 
 
 class DetectPayload(BaseModel):

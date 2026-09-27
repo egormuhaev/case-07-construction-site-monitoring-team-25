@@ -7,6 +7,18 @@ from .log import get_logger
 
 logger = get_logger("weights")
 
+# Любой из этих суффиксов означает, что веса реально на диске
+# (config/tokenizer без них — оборванная закачка).
+_WEIGHT_SUFFIXES = (
+    ".safetensors",
+    ".bin",
+    ".pt",
+    ".pth",
+    ".ckpt",
+    ".onnx",
+    ".msgpack",
+)
+
 
 def load_model(model_id: str, filename: str | None = None) -> Path:
     model_dir = WEIGHTS_DIR / model_id.replace("/", "-").lower().strip()
@@ -37,4 +49,10 @@ def load_model(model_id: str, filename: str | None = None) -> Path:
 
 
 def _is_downloaded(model_dir: Path) -> bool:
-    return model_dir.is_dir() and any(path.is_file() for path in model_dir.rglob("*"))
+    if not model_dir.is_dir():
+        return False
+    return any(
+        path.is_file() and path.suffix.lower() in _WEIGHT_SUFFIXES
+        for path in model_dir.rglob("*")
+        if ".cache" not in path.parts
+    )

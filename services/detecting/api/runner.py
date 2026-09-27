@@ -73,8 +73,11 @@ def _run_locked(
             logger.info("чекпоинт %s для %s", stage_name, job_id)
 
         if "viewpoints" not in completed:
-            with stage("группировка ракурсов", logger):
-                view_grouper(dataset)
+            if _payload_has_cameras(payload):
+                logger.info("камера задана во payload, стадия viewpoints пропущена")
+            else:
+                with stage("группировка ракурсов", logger):
+                    view_grouper(dataset)
             on_stage("viewpoints", dataset)
 
         with registry.lock:
@@ -120,9 +123,14 @@ def _dataset_from_payload(payload: DetectPayload, data_dir: Path) -> ImageDatase
                 filepath=str(path),
                 captured_date=frame.captured_date,
                 captured_time=frame.captured_time,
+                camera=frame.camera,
             )
         )
     return ImageDataset(images=images)
+
+
+def _payload_has_cameras(payload: DetectPayload) -> bool:
+    return bool(payload.frames) and all(bool(frame.camera) for frame in payload.frames)
 
 
 def resolve_data_path(data_dir: Path, relative: str) -> Path:

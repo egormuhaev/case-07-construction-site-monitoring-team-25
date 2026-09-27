@@ -14,7 +14,7 @@ import httpx
 
 REPO = Path(__file__).resolve().parent.parent
 SOURCE_DATASET = REPO / "dataset" / "test-dataset"
-SHARED_DIR = REPO / "orchestrator" / "shared"
+SHARED_DIR = REPO / "shared"
 TARGET_DATASET = SHARED_DIR / "test-dataset"
 BASE_URL = os.environ.get("DETECTING_URL", "http://127.0.0.1:8000").rstrip("/")
 POLL_SECONDS = float(os.environ.get("DETECTING_TEST_POLL_SECONDS", "2"))

@@ -5,10 +5,15 @@ from .model import Image, ImageDataset
 from .model.detected_object import DetectedObject, DetectionEvidence
 
 
-def _as_optional_int(value: Any) -> int | None:
-    if value is None:
+def _as_camera(value: Any) -> str | int | None:
+    if value is None or value == "":
         return None
-    return int(value)
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if text.isdigit() or (text.startswith("-") and text[1:].isdigit()):
+        return int(text)
+    return text
 
 
 def dataset_to_state(dataset: ImageDataset) -> dict:
@@ -22,7 +27,7 @@ def state_to_dataset(state: dict) -> ImageDataset:
             filepath=item["filepath"],
             captured_date=date.fromisoformat(item["captured_date"]),
             captured_time=time.fromisoformat(item["captured_time"]),
-            camera=item.get("camera"),
+            camera=_as_camera(item.get("camera")),
         )
         image.objects = [_object_from_state(obj) for obj in item.get("objects", [])]
         images.append(image)
@@ -34,7 +39,7 @@ def _image_state(image: Image) -> dict:
         "filepath": image.filepath,
         "captured_date": image.captured_date.isoformat(),
         "captured_time": image.captured_time.isoformat(),
-        "camera": _as_optional_int(image.camera),
+        "camera": image.camera,
         "objects": [_object_state(obj) for obj in image.objects],
     }
 

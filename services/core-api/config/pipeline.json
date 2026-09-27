@@ -1,0 +1,24 @@
+{
+  "pipelines": {
+    "plan-import": {
+      "steps": [
+        {
+          "name": "classify-plan",
+          "serviceName": "planning",
+          "serviceUrl": "http://planning:8001",
+          "pollIntervalMs": 5000
+        }
+      ]
+    },
+    "day-detection": {
+      "steps": [
+        {
+          "name": "detect",
+          "serviceName": "detecting",
+          "serviceUrl": "http://detecting:8000",
+          "pollIntervalMs": 5000
+        }
+      ]
+    }
+  }
+}

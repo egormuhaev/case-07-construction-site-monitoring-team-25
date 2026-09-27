@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
-COPY services ./services
+COPY services/detecting ./services/detecting
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -13,7 +13,7 @@ RUN apt-get update \
         libglib2.0-0 \
         libgomp1 \
     && pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir -e . \
+    && pip install --no-cache-dir -e ".[detecting]" \
     && apt-get purge -y build-essential python3-dev \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
