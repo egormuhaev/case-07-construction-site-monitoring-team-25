@@ -166,7 +166,7 @@ def compose_up() -> None:
         raise SystemExit("Не найден docker. Установите Docker и повторите запуск.")
     log("Запуск docker compose...")
     result = subprocess.run(
-        ["docker", "compose", "up", "-d", "--wait", "--wait-timeout", "120"],
+        ["docker", "compose", "up", "-d", "--wait", "--wait-timeout", "120", "db"],
         cwd=ROOT,
     )
     if result.returncode != 0:

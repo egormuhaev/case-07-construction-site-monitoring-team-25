@@ -18,7 +18,7 @@ transform_pipeline = transforms.Compose(
 
 
 @dataclass
-class ImageDataset(Dataset[torch.Tensor]):
+class ImageDataset:
     images: list[Image] = field(default_factory=list)
 
     def set_labels(self, labels: list[int]):
@@ -33,8 +33,19 @@ class ImageDataset(Dataset[torch.Tensor]):
     def __len__(self) -> int:
         return len(self.images)
 
+    def __getitem__(self, index: int) -> Image:
+        return self.images[index]
+
+
+@dataclass
+class DataloaderAdapter(Dataset[torch.Tensor]):
+    dataset: ImageDataset
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
     def __getitem__(self, index: int) -> torch.Tensor:
-        image = self.images[index]
+        image = self.dataset.images[index]
         with PILImage.open(image.filepath) as img:
             tensor = transform_pipeline(img.convert("RGB"))
         if not isinstance(tensor, torch.Tensor):
