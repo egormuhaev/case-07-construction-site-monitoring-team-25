@@ -15,7 +15,6 @@ import {
   completenessWarningText,
   formatExpectedDaily,
   FINDING_BUTTON_COPY,
-  verdictCopy,
   type CompletenessSummary,
 } from '../analysisCopy';
 import {
@@ -29,32 +28,22 @@ import { QueryState } from '../components/QueryState';
 import { StatusLabel } from '../components/StatusLabel';
 import { useMutationToast } from '../hooks/useMutationToast';
 
-function workLabel(work: Record<string, unknown>) {
-  const name = String(work.name ?? 'Работа');
-  const volume = work.volume;
-  const unit = work.unit ? String(work.unit) : '';
-  const duration = work.durationDays;
-  const bits: string[] = [];
-  if (volume != null && volume !== '') {
-    bits.push(`${volume}${unit ? ` ${unit}` : ''}`);
-  }
-  if (duration != null && duration !== '') {
-    bits.push(`${duration} дн.`);
-  }
-  if (bits.length) {
-    return `${name} (${bits.join(' / ')})`;
-  }
-  return name;
-}
+type PlanWork = Record<string, unknown>;
 
-function stageLabel(work: Record<string, unknown>): string | null {
+type StageGroup = {
+  key: string;
+  label: string;
+  works: PlanWork[];
+};
+
+function stageLabel(work: PlanWork): string | null {
   const name = work.stageName ? String(work.stageName) : '';
   if (!name) return null;
   const wbs = work.stageWbs ? String(work.stageWbs) : '';
   return wbs ? `${name} (${wbs})` : name;
 }
 
-function stagesFromWorks(works: Array<Record<string, unknown>>): string[] {
+function stagesFromWorks(works: PlanWork[]): string[] {
   const seen = new Set<string>();
   const labels: string[] = [];
   for (const work of works) {
@@ -64,6 +53,38 @@ function stagesFromWorks(works: Array<Record<string, unknown>>): string[] {
     labels.push(label);
   }
   return labels;
+}
+
+function classifierLabel(work: PlanWork): string | null {
+  const name = work.classifierName ? String(work.classifierName).trim() : '';
+  return name || null;
+}
+
+function workChainLine(work: PlanWork, equipmentTitle?: string): string {
+  const parts: string[] = [];
+  const stage = stageLabel(work);
+  if (stage) parts.push(stage);
+  const planName = work.name ? String(work.name) : '';
+  if (planName) parts.push(planName);
+  const classifier = classifierLabel(work);
+  if (classifier && classifier !== planName) parts.push(classifier);
+  if (equipmentTitle) parts.push(equipmentTitle);
+  return parts.join(' · ') || '—';
+}
+
+function workVolumeHint(work: PlanWork): string | null {
+  const bits: string[] = [];
+  if (work.volume != null && work.volume !== '') {
+    bits.push(`${work.volume}${work.unit ? ` ${work.unit}` : ''}`);
+  }
+  if (work.durationDays != null && work.durationDays !== '') {
+    bits.push(`${work.durationDays} дн.`);
+  }
+  if (work.expectedDaily != null && work.expectedDaily !== '') {
+    const daily = formatExpectedDaily(work.expectedDaily, work.unit);
+    if (daily) bits.push(`на день ~ ${daily}`);
+  }
+  return bits.length ? bits.join(' · ') : null;
 }
 
 function unmappedReasonLabel(reason: unknown): string {
@@ -97,6 +118,42 @@ function classExpectedDaily(row: AnalysisDayClass): string | null {
   }
   if (!has) return null;
   return formatExpectedDaily(total, unit);
+}
+
+function collectPlanWorks(
+  classes: AnalysisDayClass[],
+  unmapped: PlanWork[],
+): PlanWork[] {
+  const byId = new Map<string, PlanWork>();
+  for (const row of classes) {
+    if (!row.expected) continue;
+    for (const work of row.expectedWorks ?? []) {
+      const id = String(work.workId ?? '');
+      if (!id || byId.has(id)) continue;
+      byId.set(id, { ...work, _equipmentTitle: classDisplayName(row.classCode, null, row.classTitle) });
+    }
+  }
+  for (const work of unmapped) {
+    const id = String(work.workId ?? '');
+    if (!id || byId.has(id)) continue;
+    byId.set(id, work);
+  }
+  return [...byId.values()];
+}
+
+function groupWorksByStage(works: PlanWork[]): StageGroup[] {
+  const map = new Map<string, StageGroup>();
+  for (const work of works) {
+    const label = stageLabel(work) ?? 'Этап не указан';
+    const key =
+      work.stageUniqueId != null
+        ? `id:${work.stageUniqueId}`
+        : `label:${label}`;
+    const group = map.get(key) ?? { key, label, works: [] };
+    group.works.push(work);
+    map.set(key, group);
+  }
+  return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, 'ru'));
 }
 
 export default function AnalysisReportPage() {
@@ -154,7 +211,9 @@ export default function AnalysisReportPage() {
 
   const missing = classes.filter((row) => row.expected && !row.present);
   const confirmed = classes.filter((row) => row.expected && row.present);
-  const unexpected = classes.filter((row) => !row.expected && row.present && row.verdict === 'UNEXPECTED');
+  const unexpected = classes.filter(
+    (row) => !row.expected && row.present && row.verdict === 'UNEXPECTED',
+  );
 
   const activeStages = useMemo(() => {
     const raw = summary.activeStages;
@@ -167,11 +226,22 @@ export default function AnalysisReportPage() {
     });
   }, [summary.activeStages]);
 
+  const stageHeaderLine = useMemo(() => {
+    if (activeStages.length === 0) return 'Этап плана не определён';
+    if (activeStages.length <= 2) return `Этап: ${activeStages.join('; ')}`;
+    return `Этап: ${activeStages.slice(0, 2).join('; ')} и ещё ${activeStages.length - 2}`;
+  }, [activeStages]);
+
   const unmappedWorks = useMemo(() => {
     const raw = summary.unmappedWorks;
-    if (!Array.isArray(raw)) return [] as Array<Record<string, unknown>>;
-    return raw.filter((item) => item && typeof item === 'object') as Array<Record<string, unknown>>;
+    if (!Array.isArray(raw)) return [] as PlanWork[];
+    return raw.filter((item) => item && typeof item === 'object') as PlanWork[];
   }, [summary.unmappedWorks]);
+
+  const planStageGroups = useMemo(
+    () => groupWorksByStage(collectPlanWorks(classes, unmappedWorks)),
+    [classes, unmappedWorks],
+  );
 
   const periodBars = useMemo(() => {
     const cells = heatmap.data?.cells ?? [];
@@ -242,6 +312,11 @@ export default function AnalysisReportPage() {
     },
   ];
 
+  const completenessWarning = completenessWarningText(
+    summary.completeness as CompletenessSummary | undefined,
+    summary,
+  );
+
   return (
     <QueryState
       isLoading={report.isLoading}
@@ -253,19 +328,26 @@ export default function AnalysisReportPage() {
     >
       {data && (
         <Flex direction="column" gap={4} className="analysis-report">
-          <Flex justifyContent="space-between" alignItems="center" wrap gap={3}>
+          {/* 1. Шапка дня */}
+          <Flex justifyContent="space-between" alignItems="flex-start" wrap gap={3}>
             <Flex direction="column" gap={1}>
               <Text variant="header-1">
                 Отчёт по площадке · {day || data.day}
               </Text>
-              <Text color="secondary">
-                Простыми словами: что по плану должно было работать и что видно на кадрах.
-              </Text>
-              <Text color="secondary">
-                {activeStages.length > 0
-                  ? `Этап плана: ${activeStages.join('; ')}`
-                  : 'Этап плана не определён'}
-              </Text>
+              <Text color="secondary">{stageHeaderLine}</Text>
+              <Flex gap={4} wrap className="mt-1">
+                <Text>
+                  Ждали:{' '}
+                  {String(summary.expectedClassCount ?? missing.length + confirmed.length)}
+                </Text>
+                <Text>
+                  Нашли:{' '}
+                  {String(
+                    summary.presentClassCount ?? confirmed.length + unexpected.length,
+                  )}
+                </Text>
+                <Text>Сигналов: {String(summary.findingCount ?? findings.length)}</Text>
+              </Flex>
             </Flex>
             <Flex gap={2} alignItems="center" className="no-print">
               {data.observability && (
@@ -278,122 +360,146 @@ export default function AnalysisReportPage() {
             </Flex>
           </Flex>
 
-          <Card view="outlined" className="p-4">
-            <Text variant="subheader-2" className="mb-2 block">
-              Кратко за день
+          {completenessWarning && (
+            <div className="analysis-completeness-banner">
+              <Text>{completenessWarning}</Text>
+            </div>
+          )}
+          {data.lastError && (
+            <Text color="danger" className="block">
+              {data.lastError}
             </Text>
-            <Flex gap={6} wrap>
-              <Text>Ожидали групп техники: {String(summary.expectedClassCount ?? missing.length + confirmed.length)}</Text>
-              <Text>Нашли на кадрах: {String(summary.presentClassCount ?? confirmed.length + unexpected.length)}</Text>
-              <Text>Сигналов к проверке: {String(summary.findingCount ?? findings.length)}</Text>
+          )}
+
+          {/* 2. По плану на этот день */}
+          <Card view="outlined" className="p-4">
+            <Text variant="subheader-2" className="mb-1 block">
+              По плану на этот день
+            </Text>
+            <Text color="secondary" className="mb-3 block">
+              Этап · работа плана · классификатор · ожидаемая техника
+            </Text>
+            {planStageGroups.length === 0 ? (
+              <Text color="secondary">Активных работ по плану на этот день нет.</Text>
+            ) : (
+              <Flex direction="column" gap={4}>
+                {planStageGroups.map((group) => (
+                  <div key={group.key}>
+                    <Text variant="subheader-3" className="mb-2 block">
+                      {group.label}
+                    </Text>
+                    <Flex direction="column" gap={2}>
+                      {group.works.map((work, index) => {
+                        const equipment = work._equipmentTitle
+                          ? String(work._equipmentTitle)
+                          : undefined;
+                        const volume = workVolumeHint(work);
+                        const reason = work.reason
+                          ? unmappedReasonLabel(work.reason)
+                          : null;
+                        return (
+                          <div
+                            key={String(work.workId ?? index)}
+                            className="rounded border border-[var(--g-color-line-generic)] px-3 py-2"
+                          >
+                            <Text>{workChainLine(work, equipment)}</Text>
+                            {volume && (
+                              <Text color="secondary" className="mt-1 block" variant="caption-2">
+                                {volume}
+                              </Text>
+                            )}
+                            {reason && (
+                              <Text color="warning" className="mt-1 block" variant="caption-2">
+                                Технику не вывели: {reason}
+                              </Text>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </Flex>
+                  </div>
+                ))}
+              </Flex>
+            )}
+          </Card>
+
+          {/* 3. Техника */}
+          <Card view="outlined" className="p-4">
+            <Text variant="subheader-2" className="mb-3 block">
+              Техника
+            </Text>
+            <Flex direction="column" gap={4}>
+              <EquipmentSection
+                title="Нет на кадрах"
+                empty="Таких групп техники за день нет."
+                rows={missing}
+                titles={titles}
+                showMissingHint
+                showFrames={false}
+                onOpen={setPreview}
+              />
+              <EquipmentSection
+                title="Совпало с планом"
+                empty="Подтверждённых совпадений нет."
+                rows={confirmed}
+                titles={titles}
+                showFrames
+                onOpen={setPreview}
+              />
+              <EquipmentSection
+                title="Вне плана"
+                empty="Техники вне плана нет."
+                rows={unexpected}
+                titles={titles}
+                showFrames
+                onOpen={setPreview}
+              />
             </Flex>
-            {(() => {
-              const warning = completenessWarningText(
-                summary.completeness as CompletenessSummary | undefined,
-                summary,
-              );
-              return warning ? (
-                <div className="analysis-completeness-banner mt-3">
-                  <Text>{warning}</Text>
-                </div>
-              ) : null;
-            })()}
-            {data.lastError && (
-              <Text color="danger" className="mt-2 block">
-                {data.lastError}
-              </Text>
-            )}
           </Card>
 
-          <Card view="outlined" className="p-4">
-            <Text variant="subheader-2" className="mb-3 block">
-              Ждали по плану, но на кадрах не нашли
+          {/* 4. Сигналы */}
+          <Flex direction="column" gap={2}>
+            <Text variant="subheader-2">Сигналы за день</Text>
+            <QueryState
+              isEmpty={findings.length === 0 && data.status === 'COMPLETED'}
+              emptyTitle="Сигналов нет"
+              emptyDescription="Потенциальных отклонений за этот день не найдено"
+            >
+              <Table data={findings} columns={findingColumns} getRowId={(row) => row.id} />
+            </QueryState>
+            <Text color="secondary" variant="caption-2" className="no-print">
+              {FINDING_BUTTON_COPY.hint} Подтвердить — {FINDING_BUTTON_COPY.confirm.hint}{' '}
+              Отклонить — {FINDING_BUTTON_COPY.dismiss.hint}
             </Text>
-            {missing.length === 0 ? (
-              <Text color="secondary">Таких групп техники за день нет.</Text>
-            ) : (
-              <Flex direction="column" gap={3}>
-                {missing.map((row) => (
-                  <EquipmentBlock key={row.id} row={row} titles={titles} missing />
-                ))}
-              </Flex>
-            )}
-          </Card>
+          </Flex>
 
+          {/* Вторичное */}
           {unmappedWorks.length > 0 && (
-            <Card view="outlined" className="p-4">
-              <Text variant="subheader-2" className="mb-3 block">
-                Работы есть в плане, но технику вывести нельзя
-              </Text>
-              <Text color="secondary" className="mb-3 block">
-                Эти работы активны в день отчёта, но не связаны с классом детекции — в сверку техники они не попали.
-              </Text>
-              <Flex direction="column" gap={2}>
-                {unmappedWorks.map((work, index) => {
-                  const stage = stageLabel(work);
-                  return (
-                    <div
-                      key={String(work.workId ?? index)}
-                      className="rounded border border-[var(--g-color-line-generic)] p-3"
-                    >
-                      <Text variant="subheader-3">{String(work.name ?? 'Работа')}</Text>
-                      <Text color="secondary" className="mt-1 block">
-                        {[work.wbs ? `СДР ${work.wbs}` : null, stage ? `этап ${stage}` : null]
-                          .filter(Boolean)
-                          .join(' · ') || '—'}
-                      </Text>
-                      <Text className="mt-1 block">{unmappedReasonLabel(work.reason)}</Text>
-                    </div>
-                  );
-                })}
-              </Flex>
-            </Card>
-          )}
-
-          <Card view="outlined" className="p-4">
-            <Text variant="subheader-2" className="mb-3 block">
-              Совпало с планом
-            </Text>
-            {confirmed.length === 0 ? (
-              <Text color="secondary">Подтверждённых совпадений нет.</Text>
-            ) : (
-              <Flex direction="column" gap={3}>
-                {confirmed.map((row) => (
-                  <PresentEquipmentBlock
-                    key={row.id}
-                    row={row}
-                    titles={titles}
-                    onOpen={setPreview}
-                  />
+            <details className="analysis-details no-print">
+              <summary>
+                Работы без класса детекции ({unmappedWorks.length})
+              </summary>
+              <Flex direction="column" gap={2} className="mt-3">
+                {unmappedWorks.map((work, index) => (
+                  <div
+                    key={String(work.workId ?? index)}
+                    className="rounded border border-[var(--g-color-line-generic)] p-3"
+                  >
+                    <Text>{workChainLine(work)}</Text>
+                    <Text color="secondary" className="mt-1 block">
+                      {unmappedReasonLabel(work.reason)}
+                    </Text>
+                  </div>
                 ))}
               </Flex>
-            )}
-          </Card>
-
-          {unexpected.length > 0 && (
-            <Card view="outlined" className="p-4">
-              <Text variant="subheader-2" className="mb-3 block">
-                Увидели на кадрах вне плана
-              </Text>
-              <Flex direction="column" gap={3}>
-                {unexpected.map((row) => (
-                  <PresentEquipmentBlock
-                    key={row.id}
-                    row={row}
-                    titles={titles}
-                    onOpen={setPreview}
-                  />
-                ))}
-              </Flex>
-            </Card>
+            </details>
           )}
 
-          <Card view="outlined" className="p-4">
-            <Text variant="subheader-2" className="mb-2 block">
-              За весь ход работ до этого дня
-            </Text>
-            <Text color="secondary" className="mb-4 block">
-              Период: {periodFrom || '—'} — {periodTo || '—'}. Сколько дней технику ждали по плану и сколько дней её не было на кадрах.
+          <details className="analysis-details no-print">
+            <summary>За весь ход работ до этого дня</summary>
+            <Text color="secondary" className="mb-4 mt-3 block">
+              Период: {periodFrom || '—'} — {periodTo || '—'}. Сколько дней технику ждали по
+              плану и сколько дней её не было на кадрах.
             </Text>
             {periodBars.length === 0 ? (
               <Text color="secondary">Пока мало дневных отчётов для графика.</Text>
@@ -404,36 +510,10 @@ export default function AnalysisReportPage() {
                 ))}
               </Flex>
             )}
-          </Card>
+          </details>
 
-          <Card view="outlined" className="p-4 no-print">
-            <Text variant="subheader-2" className="mb-2 block">
-              Что делать с сигналами
-            </Text>
-            <Text color="secondary" className="mb-1 block">
-              {FINDING_BUTTON_COPY.hint}
-            </Text>
-            <Text color="secondary" className="mb-1 block">
-              <b>Подтвердить</b> — {FINDING_BUTTON_COPY.confirm.hint}
-            </Text>
-            <Text color="secondary" className="block">
-              <b>Отклонить</b> — {FINDING_BUTTON_COPY.dismiss.hint}
-            </Text>
-          </Card>
-
-          <Text variant="subheader-2">Сигналы за день</Text>
-          <QueryState
-            isEmpty={findings.length === 0 && data.status === 'COMPLETED'}
-            emptyTitle="Сигналов нет"
-            emptyDescription="Потенциальных отклонений за этот день не найдено"
-          >
-            <Table data={findings} columns={findingColumns} getRowId={(row) => row.id} />
-          </QueryState>
-
-          <details className="no-print">
-            <summary className="cursor-pointer text-[var(--g-color-text-secondary)]">
-              Подробная сверка (для проверки)
-            </summary>
+          <details className="analysis-details no-print">
+            <summary>Подробная сверка (для проверки)</summary>
             <div className="mt-3">
               <Table
                 data={classes}
@@ -494,50 +574,41 @@ export default function AnalysisReportPage() {
   );
 }
 
-function EquipmentBlock({
-  row,
+function EquipmentSection({
+  title,
+  empty,
+  rows,
   titles,
-  missing = false,
+  showMissingHint = false,
+  showFrames,
+  onOpen,
 }: {
-  row: AnalysisDayClass;
+  title: string;
+  empty: string;
+  rows: AnalysisDayClass[];
   titles: Record<string, string>;
-  missing?: boolean;
+  showMissingHint?: boolean;
+  showFrames: boolean;
+  onOpen: (detection: AnalysisDetection) => void;
 }) {
-  const works = row.expectedWorks ?? [];
-  const daily = classExpectedDaily(row);
-  const stages = stagesFromWorks(works);
   return (
-    <div className="rounded border border-[var(--g-color-line-generic)] p-3">
-      <Flex justifyContent="space-between" alignItems="center" wrap gap={2}>
-        <Text variant="subheader-3">
-          {classDisplayName(row.classCode, titles, row.classTitle)}
-        </Text>
-        <StatusLabel kind="verdict" status={row.verdict} />
-      </Flex>
-      <Text color="secondary" className="mt-1 block">
-        {verdictCopy(row.verdict).description}
+    <div>
+      <Text variant="subheader-3" className="mb-2 block">
+        {title} ({rows.length})
       </Text>
-      {missing && (
-        <Text className="mt-1 block">На кадрах этой техники нет.</Text>
-      )}
-      {stages.length > 0 && (
-        <Text color="secondary" className="mt-1 block">
-          Этап: {stages.join('; ')}
-        </Text>
-      )}
-      {daily && (
-        <Text className="mt-1 block">По плану на день ~ {daily}</Text>
-      )}
-      {works.length > 0 && (
-        <Flex direction="column" gap={1} className="mt-2">
-          <Text variant="caption-2" color="secondary">
-            Связанные работы по плану:
-          </Text>
-          {works.map((work, index) => (
-            <Text key={String(work.workId ?? index)}>
-              {workLabel(work)}
-              {stageLabel(work) ? ` · ${stageLabel(work)}` : ''}
-            </Text>
+      {rows.length === 0 ? (
+        <Text color="secondary">{empty}</Text>
+      ) : (
+        <Flex direction="column" gap={2}>
+          {rows.map((row) => (
+            <EquipmentRow
+              key={row.id}
+              row={row}
+              titles={titles}
+              showMissingHint={showMissingHint}
+              showFrames={showFrames}
+              onOpen={onOpen}
+            />
           ))}
         </Flex>
       )}
@@ -545,43 +616,77 @@ function EquipmentBlock({
   );
 }
 
-function PresentEquipmentBlock({
+function EquipmentRow({
   row,
   titles,
+  showMissingHint,
+  showFrames,
   onOpen,
 }: {
   row: AnalysisDayClass;
   titles: Record<string, string>;
+  showMissingHint: boolean;
+  showFrames: boolean;
   onOpen: (detection: AnalysisDetection) => void;
 }) {
+  const [framesOpen, setFramesOpen] = useState(false);
+  const works = row.expectedWorks ?? [];
+  const stages = stagesFromWorks(works);
+  const daily = classExpectedDaily(row);
   const detections = row.detections ?? [];
-  const stages = stagesFromWorks(row.expectedWorks ?? []);
+  const equipmentTitle = classDisplayName(row.classCode, titles, row.classTitle);
+  const primaryWork = works[0];
+  const chain = primaryWork
+    ? workChainLine(primaryWork, equipmentTitle)
+    : [stages[0], equipmentTitle].filter(Boolean).join(' · ');
+
   return (
     <div className="rounded border border-[var(--g-color-line-generic)] p-3">
-      <Flex justifyContent="space-between" alignItems="center" wrap gap={2}>
-        <Text variant="subheader-3">
-          {classDisplayName(row.classCode, titles, row.classTitle)}
-        </Text>
+      <Flex justifyContent="space-between" alignItems="flex-start" wrap gap={2}>
+        <Flex direction="column" gap={1} className="min-w-0 flex-1">
+          <Text variant="subheader-3">{equipmentTitle}</Text>
+          <Text color="secondary" variant="caption-2">
+            {chain}
+          </Text>
+          {showFrames && (
+            <Text color="secondary" variant="caption-2">
+              {row.frameCount} кадров · {row.objectCount} обнаружений
+              {daily ? ` · по плану ~ ${daily}` : ''}
+            </Text>
+          )}
+          {showMissingHint && (
+            <Text variant="caption-2">На кадрах этой техники нет.</Text>
+          )}
+        </Flex>
         <StatusLabel kind="verdict" status={row.verdict} />
       </Flex>
-      <Text color="secondary" className="mt-1 block">
-        {row.frameCount} кадров · {row.objectCount} обнаружений
-      </Text>
-      {stages.length > 0 && (
-        <Text color="secondary" className="mt-1 block">
-          Этап: {stages.join('; ')}
-        </Text>
-      )}
-      {detections.length > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {detections.map((item) => (
-            <DetectionCrop key={item.objectId} detection={item} onOpen={onOpen} />
-          ))}
+
+      {showFrames && (
+        <div className="mt-2">
+          {detections.length === 0 ? (
+            <Text color="secondary" variant="caption-2">
+              Картинок обнаружений нет.
+            </Text>
+          ) : (
+            <>
+              <Button
+                size="s"
+                view="flat-secondary"
+                className="no-print"
+                onClick={() => setFramesOpen((open) => !open)}
+              >
+                {framesOpen ? 'Скрыть кадры' : `Кадры (${detections.length})`}
+              </Button>
+              {framesOpen && (
+                <div className="analysis-crop-carousel mt-2">
+                  {detections.map((item) => (
+                    <DetectionCrop key={item.objectId} detection={item} onOpen={onOpen} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
-      ) : (
-        <Text color="secondary" className="mt-2 block">
-          Картинок обнаружений нет — откройте отчёт детекции.
-        </Text>
       )}
     </div>
   );
@@ -608,8 +713,8 @@ function DetectionCrop({
       const sy = Math.max(0, detection.y1 - pad);
       const sw = Math.min(image.width - sx, boxW + pad * 2);
       const sh = Math.min(image.height - sy, boxH + pad * 2);
-      const maxSide = 120;
-      const scale = Math.min(1, maxSide / Math.max(sw, sh));
+      const maxH = 96;
+      const scale = Math.min(1, maxH / sh);
       canvas.width = Math.max(1, Math.round(sw * scale));
       canvas.height = Math.max(1, Math.round(sh * scale));
       const ctx = canvas.getContext('2d');
@@ -631,11 +736,11 @@ function DetectionCrop({
   return (
     <button
       type="button"
-      className="overflow-hidden rounded border border-[var(--g-color-line-generic)] bg-[var(--g-color-base-generic)]"
+      className="analysis-crop-thumb"
       onClick={() => onOpen(detection)}
       title={`Уверенность ${(detection.confidence * 100).toFixed(0)}%`}
     >
-      <canvas ref={canvasRef} className="block max-h-[120px] max-w-[120px]" />
+      <canvas ref={canvasRef} className="block h-24 w-auto" />
     </button>
   );
 }
