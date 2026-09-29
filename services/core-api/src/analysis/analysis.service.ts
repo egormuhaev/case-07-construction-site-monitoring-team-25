@@ -424,6 +424,58 @@ export class AnalysisService {
     return qb.getMany();
   }
 
+  async listFindingsStats(
+    projectId: string,
+    query: { from?: string; to?: string },
+  ) {
+    await this.requireProject(projectId);
+    const params: unknown[] = [projectId];
+    const where: string[] = ['project_id = $1'];
+    if (query.from) {
+      params.push(query.from);
+      where.push(
+        `(day >= $${params.length} OR date_from >= $${params.length} OR date_to >= $${params.length})`,
+      );
+    }
+    if (query.to) {
+      params.push(query.to);
+      where.push(
+        `(day <= $${params.length} OR date_to <= $${params.length} OR date_from <= $${params.length})`,
+      );
+    }
+    const rows: Array<{ type: string; status: string; cnt: string }> =
+      await this.findings.manager.query(
+        `
+        SELECT type, status, COUNT(*)::text AS cnt
+        FROM analysis_finding
+        WHERE ${where.join(' AND ')}
+        GROUP BY type, status
+        ORDER BY type ASC, status ASC
+        `,
+        params,
+      );
+
+    const byStatus = { POTENTIAL: 0, CONFIRMED: 0, DISMISSED: 0 };
+    const byType: Record<string, { POTENTIAL: number; CONFIRMED: number; DISMISSED: number }> =
+      {};
+    let total = 0;
+    for (const row of rows) {
+      const count = Number(row.cnt) || 0;
+      total += count;
+      const status = row.status as keyof typeof byStatus;
+      if (status in byStatus) {
+        byStatus[status] += count;
+      }
+      if (!byType[row.type]) {
+        byType[row.type] = { POTENTIAL: 0, CONFIRMED: 0, DISMISSED: 0 };
+      }
+      if (status in byType[row.type]) {
+        byType[row.type][status] += count;
+      }
+    }
+    return { total, byStatus, byType };
+  }
+
   async getFinding(findingId: string) {
     const finding = await this.findings.findOneBy({ id: findingId });
     if (!finding) {

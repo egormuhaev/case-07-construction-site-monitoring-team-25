@@ -3,7 +3,7 @@ from __future__ import annotations
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
@@ -479,20 +479,47 @@ def run_period_analysis(
     for row in class_rows:
         by_class[row["class_code"]].append(row)
 
+    gap_reviews = load_gap_reviews(conn, payload.projectId, date_from, date_to)
     findings: list[dict[str, Any]] = []
     plan_ids = sorted({str(row["plan_id"]) for row in day_runs if row.get("plan_id")})
     titles = load_class_titles(conn)
+
+    review_gap_days = 0
+    review_gap_days_dismissed = 0
+    review_gap_days_confirmed = 0
+    review_gap_days_pending = 0
 
     for class_code, rows in sorted(by_class.items()):
         if class_code in {UNKNOWN_CODE}:
             continue
         expected_days = [r for r in rows if r["expected"]]
-        gap_days = [r for r in expected_days if r["verdict"] == "GAP"]
+        gap_days_raw = [r for r in expected_days if r["verdict"] == "GAP"]
+        dismissed_rows = [
+            r
+            for r in gap_days_raw
+            if gap_reviews.get((as_day(r["day"]), str(class_code))) == "DISMISSED"
+        ]
+        dismissed_days = {as_day(r["day"]) for r in dismissed_rows}
+        gap_days = [r for r in gap_days_raw if as_day(r["day"]) not in dismissed_days]
         confirmed_days = [r for r in expected_days if r["verdict"] == "CONFIRMED"]
         unexpected_days = [r for r in rows if r["verdict"] == "UNEXPECTED"]
+
+        for row in gap_days_raw:
+            status = gap_reviews.get((as_day(row["day"]), str(class_code)))
+            if status == "DISMISSED":
+                review_gap_days_dismissed += 1
+            elif status == "CONFIRMED":
+                review_gap_days_confirmed += 1
+                review_gap_days += 1
+            else:
+                review_gap_days_pending += 1
+                review_gap_days += 1
+
         presence_summary[class_code] = {
             "expectedDays": len(expected_days),
             "gapDays": len(gap_days),
+            "gapDaysRaw": len(gap_days_raw),
+            "gapDaysDismissed": len(dismissed_rows),
             "confirmedDays": len(confirmed_days),
             "unexpectedDays": len(unexpected_days),
             "classTitle": class_label(titles, class_code),
@@ -503,7 +530,11 @@ def run_period_analysis(
             label = human_equipment_phrase(class_label(titles, class_code))
             daily_vol, daily_unit = extract_expected_daily(expected_days)
             details: dict[str, Any] = {
-                "gapDays": [r["day"].isoformat() for r in gap_days],
+                "gapDays": [as_day(r["day"]).isoformat() for r in gap_days],
+                "gapDaysRaw": [as_day(r["day"]).isoformat() for r in gap_days_raw],
+                "gapDaysDismissed": [as_day(r["day"]).isoformat() for r in dismissed_rows],
+                "gapDaysCamera": len(gap_days_raw),
+                "gapDaysCounted": len(gap_days),
                 "expectedDays": len(expected_days),
                 "confirmedDays": len(confirmed_days),
                 "classTitle": class_label(titles, class_code),
@@ -594,6 +625,9 @@ def run_period_analysis(
     else:
         completeness = build_completeness(conn, None, None, shift)
 
+    no_activity_status = load_no_activity_status_counts(
+        conn, payload.projectId, date_from, date_to
+    )
     summary = {
         "mode": "PERIOD",
         "dateFrom": payload.dateFrom,
@@ -612,6 +646,15 @@ def run_period_analysis(
         "shiftStart": shift["shiftStart"],
         "shiftEnd": shift["shiftEnd"],
         "completeness": completeness,
+        "review": {
+            "gapDays": review_gap_days,
+            "gapDaysDismissed": review_gap_days_dismissed,
+            "gapDaysConfirmed": review_gap_days_confirmed,
+            "gapDaysPending": review_gap_days_pending,
+            "noActivityPotential": no_activity_status.get("POTENTIAL", 0),
+            "noActivityConfirmed": no_activity_status.get("CONFIRMED", 0),
+            "noActivityDismissed": no_activity_status.get("DISMISSED", 0),
+        },
     }
 
     persist_period_result(
@@ -1485,11 +1528,22 @@ def is_late_start(
 ) -> bool:
     """True if class was expected and GAP on enough prior observable days since first expectation."""
     history = load_class_history(conn, project_id, class_code, day, settings.gap_days_threshold + 2)
+    dismissed = load_dismissed_gap_days(
+        conn,
+        project_id,
+        class_code,
+        [as_day(row["day"]) for row in history],
+    )
     observable = [row for row in history if row["observability"] == "GOOD"]
     if len(observable) < settings.gap_days_threshold:
         return False
     recent = observable[-settings.gap_days_threshold :]
-    return all(row["verdict"] == "GAP" and row["expected"] for row in recent)
+    return all(
+        row["verdict"] == "GAP"
+        and row["expected"]
+        and as_day(row["day"]) not in dismissed
+        for row in recent
+    )
 
 
 def is_repeated_gap(
@@ -1500,11 +1554,176 @@ def is_repeated_gap(
     settings: Settings,
 ) -> bool:
     history = load_class_history(conn, project_id, class_code, day, settings.gap_days_threshold + 1)
+    dismissed = load_dismissed_gap_days(
+        conn,
+        project_id,
+        class_code,
+        [as_day(row["day"]) for row in history],
+    )
     observable = [row for row in history if row["observability"] in {"GOOD", "PARTIAL"}]
     if len(observable) < settings.gap_days_threshold:
         return False
     recent = observable[-settings.gap_days_threshold :]
-    return all(row["verdict"] == "GAP" for row in recent)
+    return all(
+        row["verdict"] == "GAP" and as_day(row["day"]) not in dismissed for row in recent
+    )
+
+
+def as_day(value: Any) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    return date.fromisoformat(str(value)[:10])
+
+
+def load_gap_reviews(
+    conn: Any,
+    project_id: str,
+    date_from: date,
+    date_to: date,
+) -> dict[tuple[date, str], str]:
+    """Latest human review of NO_ACTIVITY by (day, class_code)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (day, class_code)
+                   day, class_code, status
+            FROM analysis_finding
+            WHERE project_id = %s
+              AND type = 'NO_ACTIVITY'
+              AND status IN ('CONFIRMED', 'DISMISSED')
+              AND day IS NOT NULL
+              AND class_code IS NOT NULL
+              AND day BETWEEN %s AND %s
+            ORDER BY day ASC, class_code ASC, created_at DESC
+            """,
+            (project_id, date_from, date_to),
+        )
+        rows = cur.fetchall()
+    return {
+        (as_day(row["day"]), str(row["class_code"])): str(row["status"])
+        for row in rows
+    }
+
+
+def load_dismissed_gap_days(
+    conn: Any,
+    project_id: str,
+    class_code: str,
+    days: list[date],
+) -> set[date]:
+    if not days:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (day) day
+            FROM analysis_finding
+            WHERE project_id = %s
+              AND class_code = %s
+              AND type = 'NO_ACTIVITY'
+              AND status = 'DISMISSED'
+              AND day = ANY(%s)
+            ORDER BY day ASC, created_at DESC
+            """,
+            (project_id, class_code, days),
+        )
+        return {as_day(row["day"]) for row in cur.fetchall()}
+
+
+def load_no_activity_status_counts(
+    conn: Any,
+    project_id: str,
+    date_from: date,
+    date_to: date,
+) -> dict[str, int]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, COUNT(*)::int AS cnt
+            FROM analysis_finding
+            WHERE project_id = %s
+              AND type = 'NO_ACTIVITY'
+              AND day BETWEEN %s AND %s
+            GROUP BY status
+            """,
+            (project_id, date_from, date_to),
+        )
+        return {str(row["status"]): int(row["cnt"]) for row in cur.fetchall()}
+
+
+def load_reviewed_finding_statuses(
+    conn: Any,
+    project_id: str,
+    mode: str,
+) -> dict[tuple[Any, ...], str]:
+    """Map logical finding key → last CONFIRMED/DISMISSED status for carry-over."""
+    with conn.cursor() as cur:
+        if mode == "DAY":
+            cur.execute(
+                """
+                SELECT DISTINCT ON (day, class_code, type)
+                       day, class_code, type, status
+                FROM analysis_finding
+                WHERE project_id = %s
+                  AND day IS NOT NULL
+                  AND status IN ('CONFIRMED', 'DISMISSED')
+                ORDER BY day ASC, class_code ASC NULLS FIRST, type ASC, created_at DESC
+                """,
+                (project_id,),
+            )
+            return {
+                (
+                    as_day(row["day"]),
+                    row["class_code"],
+                    str(row["type"]),
+                ): str(row["status"])
+                for row in cur.fetchall()
+            }
+        cur.execute(
+            """
+            SELECT DISTINCT ON (date_from, date_to, class_code, type)
+                   date_from, date_to, class_code, type, status
+            FROM analysis_finding
+            WHERE project_id = %s
+              AND day IS NULL
+              AND date_from IS NOT NULL
+              AND date_to IS NOT NULL
+              AND status IN ('CONFIRMED', 'DISMISSED')
+            ORDER BY date_from ASC, date_to ASC, class_code ASC NULLS FIRST,
+                     type ASC, created_at DESC
+            """,
+            (project_id,),
+        )
+        return {
+            (
+                as_day(row["date_from"]) if row["date_from"] else None,
+                as_day(row["date_to"]) if row["date_to"] else None,
+                row["class_code"],
+                str(row["type"]),
+            ): str(row["status"])
+            for row in cur.fetchall()
+        }
+
+
+def finding_status_for_insert(
+    finding: dict[str, Any],
+    reviewed: dict[tuple[Any, ...], str],
+) -> str:
+    day = finding.get("day")
+    if day is not None:
+        key = (as_day(day), finding.get("class_code"), str(finding["type"]))
+    else:
+        date_from = finding.get("date_from")
+        date_to = finding.get("date_to")
+        key = (
+            as_day(date_from) if date_from is not None else None,
+            as_day(date_to) if date_to is not None else None,
+            finding.get("class_code"),
+            str(finding["type"]),
+        )
+    return reviewed.get(key, "POTENTIAL")
 
 
 def load_class_history(
@@ -1548,6 +1767,7 @@ def persist_day_result(
     classes: list[dict[str, Any]],
     findings: list[dict[str, Any]],
 ) -> None:
+    reviewed = load_reviewed_finding_statuses(conn, project_id, "DAY")
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -1596,6 +1816,7 @@ def persist_day_result(
                 ),
             )
         for finding in findings:
+            status = finding_status_for_insert(finding, reviewed)
             cur.execute(
                 """
                 INSERT INTO analysis_finding (
@@ -1603,7 +1824,7 @@ def persist_day_result(
                     type, severity, deviation, confidence, status, title, details
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, 'POTENTIAL', %s, %s
+                    %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -1617,6 +1838,7 @@ def persist_day_result(
                     finding["severity"],
                     finding["deviation"],
                     finding["confidence"],
+                    status,
                     finding["title"],
                     Jsonb(finding["details"]),
                 ),
@@ -1630,6 +1852,7 @@ def persist_period_result(
     summary: dict[str, Any],
     findings: list[dict[str, Any]],
 ) -> None:
+    reviewed = load_reviewed_finding_statuses(conn, project_id, "PERIOD")
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -1642,6 +1865,7 @@ def persist_period_result(
         )
         cur.execute("DELETE FROM analysis_finding WHERE run_id = %s", (run_id,))
         for finding in findings:
+            status = finding_status_for_insert(finding, reviewed)
             cur.execute(
                 """
                 INSERT INTO analysis_finding (
@@ -1649,7 +1873,7 @@ def persist_period_result(
                     type, severity, deviation, confidence, status, title, details
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, 'POTENTIAL', %s, %s
+                    %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -1663,6 +1887,7 @@ def persist_period_result(
                     finding["severity"],
                     finding["deviation"],
                     finding["confidence"],
+                    status,
                     finding["title"],
                     Jsonb(finding["details"]),
                 ),

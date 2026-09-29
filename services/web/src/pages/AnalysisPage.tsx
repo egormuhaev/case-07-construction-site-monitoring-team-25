@@ -17,11 +17,12 @@ import {
   classDisplayName,
   completenessWarningText,
   FINDING_BUTTON_COPY,
+  findingTypeCopy,
   observabilityCopy,
   verdictCopy,
   type CompletenessSummary,
 } from '../analysisCopy';
-import { api, type AnalysisFinding } from '../api';
+import { api, type AnalysisFinding, type FindingsStats } from '../api';
 import { FindingActions } from '../components/FindingActions';
 import { QueryState } from '../components/QueryState';
 import { StatusLabel } from '../components/StatusLabel';
@@ -41,6 +42,13 @@ const VERDICT_THEME: Record<string, 'success' | 'danger' | 'warning' | 'info' | 
   INSUFFICIENT_DATA: 'info',
 };
 
+type ReviewSummary = {
+  gapDays?: number;
+  gapDaysDismissed?: number;
+  gapDaysConfirmed?: number;
+  gapDaysPending?: number;
+};
+
 export default function AnalysisPage() {
   const { projectId = '' } = useParams();
   const navigate = useNavigate();
@@ -50,6 +58,7 @@ export default function AnalysisPage() {
   const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
   const [status, setStatus] = useState<string>('POTENTIAL');
   const [periodRunId, setPeriodRunId] = useState<string | null>(null);
+  const [periodStale, setPeriodStale] = useState(false);
 
   const periodRun = useQuery({
     queryKey: ['analysis-run', periodRunId],
@@ -75,10 +84,18 @@ export default function AnalysisPage() {
     refetchInterval: periodRunning ? 4000 : false,
   });
 
+  const findingsStats = useQuery({
+    queryKey: ['findings-stats', projectId, from, to],
+    queryFn: () => api.findingsStats(projectId, from, to),
+    enabled: Boolean(projectId && from && to && from <= to),
+  });
+
   useEffect(() => {
     if (periodRun.data?.status === 'COMPLETED') {
+      setPeriodStale(false);
       void queryClient.invalidateQueries({ queryKey: ['analysis-heatmap', projectId] });
       void queryClient.invalidateQueries({ queryKey: ['findings', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['findings-stats', projectId] });
     }
   }, [periodRun.data?.status, projectId, queryClient]);
 
@@ -86,6 +103,7 @@ export default function AnalysisPage() {
     mutationFn: () => api.startPeriodAnalysis(projectId, from, to),
     onSuccess: (result) => {
       setPeriodRunId(result.run.id);
+      setPeriodStale(false);
       toast.success('Периодный анализ запущен');
     },
     onError: (error) => toast.error('Не удалось запустить анализ', error),
@@ -95,7 +113,9 @@ export default function AnalysisPage() {
     mutationFn: ({ id, next }: { id: string; next: AnalysisFinding['status'] }) =>
       api.patchFinding(id, next),
     onSuccess: () => {
+      setPeriodStale(Boolean(periodRunId && periodRun.data?.status === 'COMPLETED'));
       void queryClient.invalidateQueries({ queryKey: ['findings', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['findings-stats', projectId] });
       toast.success('Статус сигнала обновлён');
     },
     onError: (error) => toast.error('Не удалось обновить сигнал', error),
@@ -177,6 +197,7 @@ export default function AnalysisPage() {
   ];
 
   const summary = periodRun.data?.summary as Record<string, unknown> | undefined;
+  const review = (summary?.review ?? null) as ReviewSummary | null;
 
   return (
     <Flex direction="column" gap={4} className="analysis-report">
@@ -228,7 +249,22 @@ export default function AnalysisPage() {
             <SummaryItem label="С хорошим обзором" value={summary.observableDayCount} />
             <SummaryItem label="Без кадров" value={summary.blindDayCount} />
             <SummaryItem label="Сигналов" value={summary.findingCount} />
+            {review && (
+              <>
+                <SummaryItem label="Пробелов учтено" value={review.gapDays ?? 0} />
+                <SummaryItem label="Снято человеком" value={review.gapDaysDismissed ?? 0} />
+                <SummaryItem label="На проверке" value={review.gapDaysPending ?? 0} />
+              </>
+            )}
           </Flex>
+        )}
+        {periodStale && (
+          <div className="analysis-completeness-banner mt-4">
+            <Text>
+              Разбор сигналов обновлён. График отклонений и периодные сигналы пересчитаются после
+              повторного «Отчёт за период». Сводный график сигналов уже актуален.
+            </Text>
+          </div>
         )}
         {summary &&
           (() => {
@@ -244,6 +280,24 @@ export default function AnalysisPage() {
           })()}
       </Card>
 
+      <Card view="outlined" className="p-4">
+        <Text variant="subheader-2" className="mb-3 block">
+          Сводный график сигналов
+        </Text>
+        <QueryState
+          isLoading={findingsStats.isLoading}
+          isError={findingsStats.isError}
+          error={findingsStats.error}
+          onRetry={() => void findingsStats.refetch()}
+          isEmpty={!findingsStats.isLoading && (findingsStats.data?.total ?? 0) === 0}
+          emptyTitle="Сигналов за период нет"
+          emptyDescription="Нет дневных или периодных находок в выбранном диапазоне дат"
+          skeletonHeight={80}
+        >
+          {findingsStats.data && <FindingsSummaryChart stats={findingsStats.data} />}
+        </QueryState>
+      </Card>
+
       {summary && summary.classes && typeof summary.classes === 'object' && (
         <Card view="outlined" className="p-4">
           <Text variant="subheader-2" className="mb-3 block">
@@ -255,6 +309,7 @@ export default function AnalysisPage() {
                 const expected = Number(stats.expectedDays ?? 0);
                 const present = Number(stats.confirmedDays ?? 0);
                 const gap = Number(stats.gapDays ?? 0);
+                const dismissed = Number(stats.gapDaysDismissed ?? 0);
                 const max = Math.max(expected, 1);
                 const title = String(stats.classTitle ?? classDisplayName(code, heatmap.data?.classTitles));
                 return (
@@ -263,6 +318,7 @@ export default function AnalysisPage() {
                       <Text>{title}</Text>
                       <Text color="secondary" variant="caption-2">
                         ждали {expected} · были {present} · не было {gap}
+                        {dismissed > 0 ? ` · снято ${dismissed}` : ''}
                       </Text>
                     </Flex>
                     <div className="flex h-3 overflow-hidden rounded bg-[var(--g-color-base-generic)]">
@@ -377,6 +433,88 @@ export default function AnalysisPage() {
         <Table data={findings.data ?? []} columns={columns} getRowId={(row) => row.id} />
       </QueryState>
     </Flex>
+  );
+}
+
+function FindingsSummaryChart({ stats }: { stats: FindingsStats }) {
+  const total = Math.max(stats.total, 1);
+  const typeRows = Object.entries(stats.byType)
+    .map(([type, counts]) => ({
+      type,
+      label: findingTypeCopy(type).text,
+      counts,
+      total: counts.POTENTIAL + counts.CONFIRMED + counts.DISMISSED,
+    }))
+    .filter((row) => row.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  return (
+    <Flex direction="column" gap={3}>
+      <div>
+        <Flex justifyContent="space-between" className="mb-1">
+          <Text>Все сигналы</Text>
+          <Text color="secondary" variant="caption-2">
+            на проверке {stats.byStatus.POTENTIAL} · подтверждено {stats.byStatus.CONFIRMED} ·
+            снято {stats.byStatus.DISMISSED}
+          </Text>
+        </Flex>
+        <StatusBar
+          potential={stats.byStatus.POTENTIAL}
+          confirmed={stats.byStatus.CONFIRMED}
+          dismissed={stats.byStatus.DISMISSED}
+          max={total}
+        />
+      </div>
+      {typeRows.map((row) => (
+        <div key={row.type}>
+          <Flex justifyContent="space-between" className="mb-1">
+            <Text>{row.label}</Text>
+            <Text color="secondary" variant="caption-2">
+              на проверке {row.counts.POTENTIAL} · подтверждено {row.counts.CONFIRMED} · снято{' '}
+              {row.counts.DISMISSED}
+            </Text>
+          </Flex>
+          <StatusBar
+            potential={row.counts.POTENTIAL}
+            confirmed={row.counts.CONFIRMED}
+            dismissed={row.counts.DISMISSED}
+            max={Math.max(row.total, 1)}
+          />
+        </div>
+      ))}
+    </Flex>
+  );
+}
+
+function StatusBar({
+  potential,
+  confirmed,
+  dismissed,
+  max,
+}: {
+  potential: number;
+  confirmed: number;
+  dismissed: number;
+  max: number;
+}) {
+  return (
+    <div className="flex h-3 overflow-hidden rounded bg-[var(--g-color-base-generic)]">
+      <div
+        className="h-3 bg-[var(--g-color-base-info-medium)]"
+        style={{ width: `${(potential / max) * 100}%` }}
+        title="На проверке"
+      />
+      <div
+        className="h-3 bg-[var(--g-color-base-positive-medium)]"
+        style={{ width: `${(confirmed / max) * 100}%` }}
+        title="Подтверждено"
+      />
+      <div
+        className="h-3 bg-[var(--g-color-base-misc-medium)]"
+        style={{ width: `${(dismissed / max) * 100}%` }}
+        title="Снято"
+      />
+    </div>
   );
 }
 
