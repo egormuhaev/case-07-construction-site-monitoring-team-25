@@ -1,15 +1,30 @@
 services:
   db:
-    extends:
-      file: ./deploy/db/db.yml
-      service: db
+    image: pgvector/pgvector:pg16
+    platform: linux/amd64
+    container_name: monitoring-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin_password
+      POSTGRES_DB: monitoring_db
+    ports:
+      - "12432:5432"
+    volumes:
+      - monitoring_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d monitoring_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   redis:
     image: redis:7-alpine
+    platform: linux/amd64
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "12679:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
@@ -18,21 +33,24 @@ services:
     volumes:
       - redis-data:/data
 
-  orchestrator:
+  core-api:
+    platform: linux/amd64
     restart: unless-stopped
     build:
-      context: ./orchestrator/orchestrator
+      context: ./services/core-api
     environment:
       PORT: 3000
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
-      POSTGRES_DB: orchestrator
-      POSTGRES_USER: orchestrator
-      POSTGRES_PASSWORD: orchestrator
+      POSTGRES_DB: monitoring_db
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin_password
       REDIS_HOST: redis
       REDIS_PORT: 6379
       CACHE_TTL_SECONDS: 604800
       PIPELINE_CONFIG_PATH: /app/config/pipeline.json
+      MIGRATIONS_DIR: /app/migrations
+      DATA_DIR: /data
       SERVICE_TIMEOUT_MS: 15000
       SERVICE_RETRY_BASE_DELAY_MS: 5000
       SERVICE_RETRY_MAX_DELAY_MS: 300000
@@ -40,36 +58,54 @@ services:
       DISPATCH_LEASE_MS: 60000
       DISPATCH_RETRY_DELAY_MS: 5000
       ORCHESTRATOR_CONCURRENCY: 10
-      DB_SYNCHRONIZE: "true"
+      DETECTION_CRON: "0 3 * * *"
+      DETECTION_TZ: Europe/Moscow
+      ANALYSIS_CRON: "0 4 * * *"
     volumes:
-      - ./orchestrator/shared:/data
-      - ./orchestrator/orchestrator/config:/app/config:ro
+      - ./shared:/data
+      - ./deploy/db/migrations:/app/migrations:ro
     ports:
-      - "3000:3000"
+      - "12300:3000"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      detecting:
+        condition: service_healthy
+      planning:
+        condition: service_healthy
+      analysis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
   detecting:
+    platform: linux/amd64
     restart: unless-stopped
     build:
       context: .
       dockerfile: services/detecting/Dockerfile
-    env_file:
-      - .env
     environment:
       DETECTING_REDIS_HOST: redis
       DETECTING_DATA_DIR: /data
       DETECTING_WEIGHTS_DIR: /weights
       DETECTING_CACHE_DIR: /cache
     volumes:
-      - ./orchestrator/shared:/data
+      - ./shared:/data
       - detecting-weights:/weights
       - detecting-cache:/cache
     ports:
-      - "8000:8000"
+      - "12800:8000"
     depends_on:
       redis:
         condition: service_healthy
@@ -85,8 +121,97 @@ services:
       timeout: 5s
       retries: 20
 
+  planning:
+    platform: linux/amd64
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/planning/Dockerfile
+    environment:
+      PLANNING_REDIS_HOST: redis
+      PLANNING_DATA_DIR: /data
+      PLANNING_POSTGRES_HOST: db
+      PLANNING_POSTGRES_PORT: 5432
+      PLANNING_POSTGRES_DB: monitoring_db
+      PLANNING_POSTGRES_USER: admin
+      PLANNING_POSTGRES_PASSWORD: admin_password
+      PLANNING_NORMALIZE_ENABLED: "false"
+      PLANNING_RERANK_ENABLED: "false"
+      PLANNING_CACHE_DIR: /cache
+    volumes:
+      - ./shared:/data
+      - planning-cache:/cache
+    ports:
+      - "12801:8001"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  analysis:
+    platform: linux/amd64
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/analysis/Dockerfile
+    environment:
+      ANALYSIS_REDIS_HOST: redis
+      ANALYSIS_POSTGRES_HOST: db
+      ANALYSIS_POSTGRES_PORT: 5432
+      ANALYSIS_POSTGRES_DB: monitoring_db
+      ANALYSIS_POSTGRES_USER: admin
+      ANALYSIS_POSTGRES_PASSWORD: admin_password
+      ANALYSIS_PERSON_GAP_ENABLED: "false"
+    ports:
+      - "12802:8002"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  web:
+    platform: linux/amd64
+    restart: unless-stopped
+    build:
+      context: ./services/web
+    ports:
+      - "12080:80"
+    depends_on:
+      core-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pidof nginx || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
 volumes:
   monitoring_db_data:
   redis-data:
   detecting-weights:
   detecting-cache:
+  planning-cache:

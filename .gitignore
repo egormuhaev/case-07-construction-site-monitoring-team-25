@@ -18,9 +18,19 @@ build/
 .python-version
 reports/
 
+# Согласованные дампы классификаторов (снятие: make dump-classifiers)
+dataset/dumps/*.csv.gz
+dataset/dumps/*.tmp
+work_classifier_normalized.sql
+work_classifier_vector.sql
+
 node_modules/
-orchestrator/dist
+services/core-api/dist
 shared/workflows/
+shared/projects/
 shared/.idempotency/
+
+# leftover after migrate to services/core-api
+orchestrator/
 
 

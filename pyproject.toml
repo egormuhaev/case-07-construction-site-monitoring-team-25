@@ -5,10 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "monitoring-construction-site"
 version = "0.1.0"
-description = "Мониторинг строительной площадки: детекция и группировка ракурсов"
+description = "Мониторинг строительной площадки: детекция, календарный план и ядро системы"
 requires-python = ">=3.10"
 readme = "README.md"
-dependencies = [
+dependencies = []
+
+[project.optional-dependencies]
+detecting = [
     "numpy",
     "pillow",
     "scikit-learn",
@@ -26,8 +29,25 @@ dependencies = [
     "pydantic-settings",
     "httpx",
 ]
-
-[project.optional-dependencies]
+planning = [
+    "numpy",
+    "sentence-transformers",
+    "torch",
+    "fastapi",
+    "uvicorn[standard]",
+    "redis",
+    "pydantic-settings",
+    "psycopg[binary]",
+    "JPype1",
+    "mpxj",
+]
+analysis = [
+    "fastapi",
+    "uvicorn[standard]",
+    "redis",
+    "pydantic-settings",
+    "psycopg[binary]",
+]
 calendar = [
     "faiss-cpu",
     "ijson",
@@ -39,13 +59,18 @@ calendar = [
     "psycopg[binary]",
     "pypdfium2",
 ]
+seed = [
+    "ijson",
+    "openpyxl",
+    "psycopg[binary]",
+]
 
 [project.scripts]
 detecting = "detecting.main:main"
 
 [tool.setuptools.packages.find]
 where = ["services"]
-include = ["detecting*"]
+include = ["detecting*", "planning*", "analysis*"]
 
 [tool.pyright]
 extraPaths = ["services"]

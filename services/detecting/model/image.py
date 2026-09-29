@@ -9,5 +9,5 @@ class Image:
     filepath: str
     captured_date: date
     captured_time: time
-    camera: int | None = None
+    camera: str | int | None = None
     objects: list[DetectedObject] = field(init=False, default_factory=list)
