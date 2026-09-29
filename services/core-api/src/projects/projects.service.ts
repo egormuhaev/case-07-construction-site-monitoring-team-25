@@ -1,14 +1,15 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { rm } from 'node:fs/promises';
 import {
   BadRequestException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { StorageService } from '../storage/storage.service';
 import { WorkflowEngineService } from '../workflows/workflow-engine.service';
-import { CreateProjectDto, UpdateProjectDto } from './dto';
+import { CreateProjectDto, MatchAssignmentDto, UpdateProjectDto } from './dto';
 import { Project } from './entities/project.entity';
 import { ProjectPlan } from './entities/project-plan.entity';
 import { ProjectDay } from './entities/project-day.entity';
@@ -64,9 +65,14 @@ export class ProjectsService {
         customer: dto.customer ?? null,
         contractor: dto.contractor ?? null,
         address: dto.address ?? null,
+        objectType: dto.objectType ?? null,
+        contractNumber: dto.contractNumber ?? null,
+        notes: dto.notes ?? null,
         startDate: dto.startDate ?? null,
         endDate: dto.endDate ?? null,
         timezone: dto.timezone ?? 'Europe/Moscow',
+        shiftStart: this.normalizeShiftTime(dto.shiftStart) ?? null,
+        shiftEnd: this.normalizeShiftTime(dto.shiftEnd) ?? null,
         ingestToken: randomBytes(24).toString('hex'),
       }),
     );
@@ -79,11 +85,32 @@ export class ProjectsService {
       customer: dto.customer === undefined ? project.customer : dto.customer,
       contractor: dto.contractor === undefined ? project.contractor : dto.contractor,
       address: dto.address === undefined ? project.address : dto.address,
+      objectType: dto.objectType === undefined ? project.objectType : dto.objectType,
+      contractNumber:
+        dto.contractNumber === undefined ? project.contractNumber : dto.contractNumber,
+      notes: dto.notes === undefined ? project.notes : dto.notes,
       startDate: dto.startDate === undefined ? project.startDate : dto.startDate,
       endDate: dto.endDate === undefined ? project.endDate : dto.endDate,
       timezone: dto.timezone ?? project.timezone,
+      shiftStart:
+        dto.shiftStart === undefined
+          ? project.shiftStart
+          : this.normalizeShiftTime(dto.shiftStart),
+      shiftEnd:
+        dto.shiftEnd === undefined ? project.shiftEnd : this.normalizeShiftTime(dto.shiftEnd),
     });
     return this.projects.save(project);
+  }
+
+  async remove(id: string) {
+    const project = await this.requireProject(id);
+    await this.projects.remove(project);
+    try {
+      await rm(this.storage.projectDir(id), { recursive: true, force: true });
+    } catch {
+      // файлы могли отсутствовать — запись уже удалена
+    }
+    return { ok: true };
   }
 
   async rotateToken(id: string) {
@@ -138,20 +165,35 @@ export class ProjectsService {
     }
     const qb = this.works
       .createQueryBuilder('w')
-      .leftJoinAndMapOne('w.match', WorkClassifierMatch, 'm', 'm.work_id = w.id')
-      .leftJoinAndMapOne('m.classifier', WorkClassifier, 'c', 'c.id = m.classifier_id')
       .where('w.plan_id = :planId', { planId: plan.id })
       .orderBy('w.position', 'ASC');
     if (query.q) {
       qb.andWhere('w.name ILIKE :q', { q: `%${query.q}%` });
     }
     if (query.source === 'AUTO' || query.source === 'MANUAL') {
-      qb.andWhere('m.source = :source', { source: query.source });
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM work_classifier_match m
+          WHERE m.work_id = w.id AND m.source = :source
+        )`,
+        { source: query.source },
+      );
     }
-    const take = Math.min(Number(query.take ?? 50), 200);
+    if (query.source === 'UNMATCHED') {
+      qb.andWhere(
+        `NOT EXISTS (SELECT 1 FROM work_classifier_match m WHERE m.work_id = w.id)`,
+      );
+    }
+    const take = Math.min(Number(query.take ?? 50), 500);
     const skip = Number(query.skip ?? 0);
     const [rows, total] = await qb.skip(skip).take(take).getManyAndCount();
     const workIds = rows.map((row) => row.id);
+    const matches = workIds.length
+      ? await this.matches.find({
+          where: workIds.map((workId) => ({ workId })),
+          relations: { classifier: true },
+        })
+      : [];
     const candidates = workIds.length
       ? await this.candidates.find({
           where: workIds.map((workId) => ({ workId })),
@@ -159,6 +201,12 @@ export class ProjectsService {
           order: { rank: 'ASC' },
         })
       : [];
+    const matchesByWork = new Map<string, WorkClassifierMatch[]>();
+    for (const item of matches) {
+      const list = matchesByWork.get(item.workId) ?? [];
+      list.push(item);
+      matchesByWork.set(item.workId, list);
+    }
     const byWork = new Map<string, WorkClassifierCandidate[]>();
     for (const item of candidates) {
       const list = byWork.get(item.workId) ?? [];
@@ -168,10 +216,15 @@ export class ProjectsService {
     return {
       plan,
       total,
-      items: rows.map((work) => ({
-        ...work,
-        candidates: (byWork.get(work.id) ?? []).slice(0, 8),
-      })),
+      items: rows.map((work) => {
+        const workMatches = matchesByWork.get(work.id) ?? [];
+        return {
+          ...work,
+          matches: workMatches,
+          match: workMatches[0] ?? null,
+          candidates: (byWork.get(work.id) ?? []).slice(0, 8),
+        };
+      }),
     };
   }
 
@@ -198,24 +251,56 @@ export class ProjectsService {
   }
 
   async patchMatch(workId: string, classifierId: string) {
+    return this.replaceMatches(workId, [{ classifierId, volume: null, durationDays: null }]);
+  }
+
+  async replaceMatches(workId: string, assignments: MatchAssignmentDto[]) {
     const work = await this.works.findOneBy({ id: workId });
     if (!work) {
       throw new NotFoundException('работа не найдена');
     }
-    const classifier = await this.classifier.findOneBy({ id: classifierId });
-    if (!classifier) {
+    if (!assignments?.length) {
+      await this.matches.delete({ workId });
+      return [];
+    }
+    const unique = new Map<string, MatchAssignmentDto>();
+    for (const item of assignments) {
+      if (!item?.classifierId) continue;
+      unique.set(item.classifierId, item);
+    }
+    const classifierIds = [...unique.keys()];
+    const classifiers = await this.classifier.find({
+      where: { id: In(classifierIds) },
+    });
+    if (classifiers.length !== classifierIds.length) {
       throw new NotFoundException('норма классификатора не найдена');
     }
+    await this.matches.delete({ workId });
     await this.matches.save(
-      this.matches.create({
-        workId,
-        classifierId,
-        source: 'MANUAL',
-        biScore: null,
-        rerankScore: null,
-      }),
+      [...unique.values()].map((item) =>
+        this.matches.create({
+          workId,
+          classifierId: item.classifierId,
+          source: 'MANUAL',
+          biScore: null,
+          rerankScore: null,
+          volume:
+            item.volume === undefined || item.volume === null || Number.isNaN(Number(item.volume))
+              ? null
+              : Number(item.volume),
+          durationDays:
+            item.durationDays === undefined ||
+            item.durationDays === null ||
+            Number.isNaN(Number(item.durationDays))
+              ? null
+              : Number(item.durationDays),
+        }),
+      ),
     );
-    return this.matches.findOne({ where: { workId }, relations: { classifier: true } });
+    return this.matches.find({
+      where: { workId },
+      relations: { classifier: true },
+    });
   }
 
   async catalog(query: {
@@ -335,9 +420,10 @@ export class ProjectsService {
     const saved = [];
     for (let i = 0; i < files.length; i += 1) {
       const file = files[i];
-      const capturedAt = capturedAtList[i]
-        ? new Date(capturedAtList[i])
-        : new Date(`${day}T12:00:00`);
+      const capturedAt = this.parseProjectLocalDateTime(
+        capturedAtList[i] || `${day}T12:00:00`,
+        project.timezone,
+      );
       saved.push(
         await this.persistImage({
           project,
@@ -369,7 +455,9 @@ export class ProjectsService {
     const now = new Date();
     const saved = [];
     for (let i = 0; i < params.files.length; i += 1) {
-      const capturedAt = params.capturedAt?.[i] ? new Date(params.capturedAt[i]) : now;
+      const capturedAt = params.capturedAt?.[i]
+        ? this.parseProjectLocalDateTime(params.capturedAt[i], project.timezone)
+        : now;
       const day = this.dayKey(capturedAt, project.timezone);
       const row = await this.ensureDay(project.id, day);
       saved.push(
@@ -479,6 +567,16 @@ export class ProjectsService {
     return '.jpg';
   }
 
+  /** HH:MM или HH:MM:SS → HH:MM:SS для колонки TIME; пустое → null. */
+  private normalizeShiftTime(value: string | null | undefined): string | null {
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const match = raw.match(/^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/);
+    if (!match) return null;
+    return `${match[1]}:${match[2]}:${match[3] ?? '00'}`;
+  }
+
   private dayKey(date: Date, timezone: string) {
     try {
       return new Intl.DateTimeFormat('en-CA', {
@@ -489,6 +587,67 @@ export class ProjectsService {
       }).format(date);
     } catch {
       return date.toISOString().slice(0, 10);
+    }
+  }
+
+  /** Разбирает локальное время стройки (или ISO с offset) в абсолютный момент. */
+  private parseProjectLocalDateTime(value: string, timezone: string): Date {
+    const raw = value.trim();
+    if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(raw)) {
+      return new Date(raw);
+    }
+    const normalized = raw.includes('T') ? raw : `${raw}T12:00:00`;
+    const match = normalized.match(
+      /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/,
+    );
+    if (!match) {
+      return new Date(raw);
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = Number(match[4]);
+    const minute = Number(match[5]);
+    const second = Number(match[6] ?? 0);
+    return this.zonedWallTimeToUtc(year, month, day, hour, minute, second, timezone);
+  }
+
+  private zonedWallTimeToUtc(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+    second: number,
+    timeZone: string,
+  ): Date {
+    const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second);
+    try {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      });
+      const parts = formatter.formatToParts(new Date(utcGuess));
+      const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? '0');
+      let hourInTz = get('hour');
+      if (hourInTz === 24) hourInTz = 0;
+      const asTzUtc = Date.UTC(
+        get('year'),
+        get('month') - 1,
+        get('day'),
+        hourInTz,
+        get('minute'),
+        get('second'),
+      );
+      return new Date(utcGuess - (asTzUtc - utcGuess));
+    } catch {
+      return new Date(utcGuess);
     }
   }
 

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AnalysisService } from '../analysis/analysis.service';
 import { WORKFLOW_COMPLETED, WORKFLOW_FAILED } from '../workflows/workflow-engine.service';
 import { ProjectPlan } from './entities/project-plan.entity';
 import { ProjectDay } from './entities/project-day.entity';
@@ -19,6 +20,7 @@ export class WorkflowEventsListener {
     @InjectRepository(DetectionRun) private readonly runs: Repository<DetectionRun>,
     @InjectRepository(DetectionFrame) private readonly frames: Repository<DetectionFrame>,
     @InjectRepository(DetectionObject) private readonly objects: Repository<DetectionObject>,
+    private readonly analysis: AnalysisService,
   ) {}
 
   @OnEvent(WORKFLOW_COMPLETED)
@@ -34,6 +36,9 @@ export class WorkflowEventsListener {
     if (event.pipeline === 'day-detection') {
       await this.onDetectionDone(event, true);
     }
+    if (event.pipeline === 'day-analysis' || event.pipeline === 'period-analysis') {
+      await this.analysis.markCompleted(event.workflowId, event.result);
+    }
   }
 
   @OnEvent(WORKFLOW_FAILED)
@@ -48,6 +53,9 @@ export class WorkflowEventsListener {
     }
     if (event.pipeline === 'day-detection') {
       await this.onDetectionDone(event, false, event.error);
+    }
+    if (event.pipeline === 'day-analysis' || event.pipeline === 'period-analysis') {
+      await this.analysis.markFailed(event.workflowId, event.error);
     }
   }
 
@@ -81,6 +89,8 @@ export class WorkflowEventsListener {
     error?: string,
   ) {
     const dayId = String(event.payload.dayId ?? '');
+    const projectId = String(event.payload.projectId ?? '');
+    const dayKey = String(event.payload.day ?? '');
     const day = await this.days.findOneBy({ id: dayId });
     const run = await this.runs.findOne({
       where: { workflowId: event.workflowId },
@@ -146,6 +156,21 @@ export class WorkflowEventsListener {
             classificationConfidence: classification?.confidence ?? null,
             needsRefinement: Boolean(obj.needs_refinement),
           }),
+        );
+      }
+    }
+
+    if (projectId && dayKey) {
+      try {
+        await this.analysis.startDay(projectId, dayKey, 'AUTO', {
+          detectionRunId: run.id,
+        });
+        this.logger.log(`автозапуск анализа ${projectId} ${dayKey}`);
+      } catch (analysisError) {
+        this.logger.warn(
+          `не удалось запустить анализ после детекции ${projectId} ${dayKey}: ${
+            analysisError instanceof Error ? analysisError.message : analysisError
+          }`,
         );
       }
     }

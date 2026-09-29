@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
-import { ArrowRotateLeft, Pencil, Xmark } from '@gravity-ui/icons';
+import { useNavigate, useParams } from 'react-router-dom';
+import { ArrowRotateLeft, Pencil, TrashBin, Xmark } from '@gravity-ui/icons';
 import {
   Alert,
   Button,
@@ -15,6 +15,7 @@ import {
   Spin,
   Table,
   Text,
+  TextArea,
   TextInput,
   type TableColumnConfig,
 } from '@gravity-ui/uikit';
@@ -31,11 +32,21 @@ export default function ProjectPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [rotateOpen, setRotateOpen] = useState(false);
   const [planFile, setPlanFile] = useState<File | null>(null);
+  const navigate = useNavigate();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteName, setDeleteName] = useState('');
   const [form, setForm] = useState({
     name: '',
     customer: '',
     contractor: '',
     address: '',
+    objectType: '',
+    contractNumber: '',
+    notes: '',
+    startDate: '',
+    endDate: '',
+    shiftStart: '',
+    shiftEnd: '',
   });
 
   const project = useQuery({
@@ -57,6 +68,13 @@ export default function ProjectPage() {
       customer: project.data.customer ?? '',
       contractor: project.data.contractor ?? '',
       address: project.data.address ?? '',
+      objectType: project.data.objectType ?? '',
+      contractNumber: project.data.contractNumber ?? '',
+      notes: project.data.notes ?? '',
+      startDate: project.data.startDate ?? '',
+      endDate: project.data.endDate ?? '',
+      shiftStart: (project.data.shiftStart ?? '').slice(0, 5),
+      shiftEnd: (project.data.shiftEnd ?? '').slice(0, 5),
     });
   }, [project.data, editOpen]);
 
@@ -67,6 +85,13 @@ export default function ProjectPage() {
         customer: form.customer || null,
         contractor: form.contractor || null,
         address: form.address || null,
+        objectType: form.objectType || null,
+        contractNumber: form.contractNumber || null,
+        notes: form.notes || null,
+        startDate: form.startDate || null,
+        endDate: form.endDate || null,
+        shiftStart: form.shiftStart || null,
+        shiftEnd: form.shiftEnd || null,
       }),
     onSuccess: () => {
       setEditOpen(false);
@@ -84,6 +109,15 @@ export default function ProjectPage() {
       toast.success('Токен обновлён');
     },
     onError: (error) => toast.error('Не удалось обновить токен', error),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.deleteProject(projectId),
+    onSuccess: () => {
+      toast.success('Проект удалён');
+      navigate('/');
+    },
+    onError: (error) => toast.error('Не удалось удалить проект', error),
   });
 
   const upload = useMutation({
@@ -143,12 +177,24 @@ export default function ProjectPage() {
     >
       {item && (
         <Flex direction="column" gap={5}>
-          <Flex justifyContent="space-between" alignItems="center">
+          <Flex justifyContent="space-between" alignItems="center" wrap gap={3}>
             <Text variant="header-1">{item.name}</Text>
-            <Button view="outlined" onClick={() => setEditOpen(true)}>
-              <Icon data={Pencil} />
-              Редактировать
-            </Button>
+            <Flex gap={2}>
+              <Button view="outlined" onClick={() => setEditOpen(true)}>
+                <Icon data={Pencil} />
+                Редактировать
+              </Button>
+              <Button
+                view="outlined-danger"
+                onClick={() => {
+                  setDeleteName('');
+                  setDeleteOpen(true);
+                }}
+              >
+                <Icon data={TrashBin} />
+                Удалить
+              </Button>
+            </Flex>
           </Flex>
 
           <Card view="outlined" className="p-4">
@@ -160,7 +206,17 @@ export default function ProjectPage() {
                 {item.contractor || '—'}
               </DefinitionList.Item>
               <DefinitionList.Item name="Адрес">{item.address || '—'}</DefinitionList.Item>
+              <DefinitionList.Item name="Тип объекта">{item.objectType || '—'}</DefinitionList.Item>
+              <DefinitionList.Item name="Номер договора">{item.contractNumber || '—'}</DefinitionList.Item>
+              <DefinitionList.Item name="Начало">{item.startDate || '—'}</DefinitionList.Item>
+              <DefinitionList.Item name="Окончание">{item.endDate || '—'}</DefinitionList.Item>
               <DefinitionList.Item name="Часовой пояс">{item.timezone}</DefinitionList.Item>
+              <DefinitionList.Item name="Смена">
+                {item.shiftStart && item.shiftEnd
+                  ? `${String(item.shiftStart).slice(0, 5)} – ${String(item.shiftEnd).slice(0, 5)}`
+                  : 'не задана (смотрим все кадры суток)'}
+              </DefinitionList.Item>
+              <DefinitionList.Item name="Доп. сведения">{item.notes || '—'}</DefinitionList.Item>
             </DefinitionList>
           </Card>
 
@@ -297,6 +353,49 @@ export default function ProjectPage() {
                   value={form.address}
                   onUpdate={(value) => setForm((current) => ({ ...current, address: value }))}
                 />
+                <TextInput
+                  label="Тип объекта"
+                  value={form.objectType}
+                  onUpdate={(value) => setForm((current) => ({ ...current, objectType: value }))}
+                />
+                <TextInput
+                  label="Номер договора"
+                  value={form.contractNumber}
+                  onUpdate={(value) => setForm((current) => ({ ...current, contractNumber: value }))}
+                />
+                <TextInput
+                  label="Дата начала"
+                  type="date"
+                  value={form.startDate}
+                  onUpdate={(value) => setForm((current) => ({ ...current, startDate: value }))}
+                />
+                <TextInput
+                  label="Дата окончания"
+                  type="date"
+                  value={form.endDate}
+                  onUpdate={(value) => setForm((current) => ({ ...current, endDate: value }))}
+                />
+                <TextInput
+                  label="Начало смены"
+                  type="time"
+                  value={form.shiftStart}
+                  onUpdate={(value) => setForm((current) => ({ ...current, shiftStart: value }))}
+                />
+                <TextInput
+                  label="Конец смены"
+                  type="time"
+                  value={form.shiftEnd}
+                  onUpdate={(value) => setForm((current) => ({ ...current, shiftEnd: value }))}
+                />
+                <Text color="secondary" variant="caption-2">
+                  Необязательно. Если задано — анализ смотрит только кадры внутри смены.
+                </Text>
+                <TextArea
+                  label="Дополнительные сведения"
+                  value={form.notes}
+                  minRows={3}
+                  onUpdate={(value) => setForm((current) => ({ ...current, notes: value }))}
+                />
               </Flex>
             </Dialog.Body>
             <Dialog.Footer
@@ -323,6 +422,34 @@ export default function ProjectPage() {
               propsButtonApply={{
                 view: 'outlined-danger',
                 loading: rotate.isPending,
+              }}
+            />
+          </Dialog>
+
+          <Dialog open={deleteOpen} onClose={() => setDeleteOpen(false)} size="s">
+            <Dialog.Header caption="Удалить проект?" />
+            <Dialog.Body>
+              <Flex direction="column" gap={3}>
+                <Text>
+                  Будут удалены план, дни, кадры и отчёты. Это действие нельзя отменить.
+                  Введите название проекта для подтверждения: <b>{item.name}</b>
+                </Text>
+                <TextInput
+                  label="Название проекта"
+                  value={deleteName}
+                  onUpdate={setDeleteName}
+                />
+              </Flex>
+            </Dialog.Body>
+            <Dialog.Footer
+              onClickButtonCancel={() => setDeleteOpen(false)}
+              onClickButtonApply={() => remove.mutate()}
+              textButtonApply="Удалить"
+              textButtonCancel="Отмена"
+              propsButtonApply={{
+                view: 'outlined-danger',
+                loading: remove.isPending,
+                disabled: deleteName.trim() !== item.name,
               }}
             />
           </Dialog>

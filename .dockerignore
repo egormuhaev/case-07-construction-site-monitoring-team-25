@@ -12,6 +12,10 @@
 shared
 weights
 .cache
+**/weights
+**/.cache
+**/*.pt
+**/*.tar
 reports
 dataset
 notebooks

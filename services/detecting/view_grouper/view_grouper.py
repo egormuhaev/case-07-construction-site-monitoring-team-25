@@ -15,8 +15,18 @@ logger = get_logger("view_grouper")
 
 
 def view_grouper(dataset: ImageDataset) -> ImageDataset:
+    count = len(dataset.images)
+    if count < PCA_COMPONENTS:
+        logger.info(
+            "ракурсы: %d кадров, меньше %d — все в одной камере",
+            count,
+            PCA_COMPONENTS,
+        )
+        dataset.set_labels([0] * count)
+        return dataset
+
     device = get_device()
-    logger.info("ракурсы: %d кадров, устройство %s", len(dataset.images), device)
+    logger.info("ракурсы: %d кадров, устройство %s", count, device)
 
     dataloader = DataLoader(
         DataloaderAdapter(dataset), 

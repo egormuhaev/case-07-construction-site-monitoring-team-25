@@ -1,6 +1,6 @@
 # Мониторинг строительной площадки
 
-Единая система: проекты, календарный план, кадры с камер и отчёт детекции.
+Единая система: проекты, календарный план, кадры с камер, отчёт детекции и анализ план/факт.
 
 ```
 services/web  →  REST  →  services/core-api (NestJS)
@@ -11,7 +11,7 @@ services/web  →  REST  →  services/core-api (NestJS)
                                │
               workflow-движок стартует job-ы
                                │
-              services/planning     services/detecting
+              services/planning  services/detecting  services/analysis
 ```
 
 ## Подъём
@@ -20,16 +20,18 @@ services/web  →  REST  →  services/core-api (NestJS)
 
 ```bash
 cp .env.example .env   # по желанию, compose уже содержит значения по умолчанию
-make up
+make build             # собрать образы (с кешем слоёв; повторно не тянет torch)
+make up                # поднять уже собранные контейнеры без --build
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[seed]"
 make seed
 ```
 
-Клиент: http://localhost:8080  
-API: http://localhost:3000/api  
-Health: http://localhost:3000/health, detecting :8000, planning :8001.
+Клиент: http://localhost:12080  
+API: http://localhost:12300/api  
+Health: http://localhost:12300/health, detecting :12800, planning :12801, analysis :12802.  
+Postgres (с хоста): `localhost:12432`, Redis: `localhost:12679`.
 
 `make seed` грузит классификаторы и связку `detection_class_machine`. Предпочтительный источник — согласованный дамп `dataset/dumps/*.csv.gz` (машины, работы, normalized, vector с теми же UUID):
 
@@ -49,15 +51,16 @@ make seed               # или: python scripts/seed.py --reload
 | Сервис | Роль |
 | --- | --- |
 | `services/web` | Vite + React + Gravity UI, nginx проксирует `/api` |
-| `services/core-api` | Домен (проекты, планы, дни, ingest, детекция) и workflow-движок |
+| `services/core-api` | Домен (проекты, планы, дни, ingest, детекция, анализ) и workflow-движок |
 | `services/planning` | Разбор .mpp, векторизация, rerank, запись работ |
 | `services/detecting` | Детекция техники и людей |
+| `services/analysis` | Дневной и периодный анализ план/факт по группам техники |
 | `db` | Одна Postgres `monitoring_db` |
 | `redis` | Очереди и чекпоинты job-ов |
 
 Схема накатывается core-api при старте из `deploy/db/migrations`. `synchronize` выключен.
 
-Пайплайны задаются в `services/core-api/config/pipeline.json`: `plan-import` и `day-detection`. Новый шаг — добавить сервис с контрактом `POST /jobs` + `GET /jobs/{id}` (идемпотентность по `requestId`) и дописать шаг в нужный пайплайн.
+Пайплайны задаются в `services/core-api/config/pipeline.json`: `plan-import`, `day-detection`, `day-analysis`, `period-analysis`. Новый шаг — добавить сервис с контрактом `POST /jobs` + `GET /jobs/{id}` (идемпотентность по `requestId`) и дописать шаг в нужный пайплайн.
 
 Файлы на общем томе `./shared` → `/data`:
 
@@ -81,11 +84,14 @@ Multipart:
 
 Ночная детекция: cron `0 3 * * *` `Europe/Moscow`, дни за вчера в статусе `COLLECTING`, без кадров и с ручным прогоном пропускаются.
 
+После успешной детекции core-api автоматически стартует пайплайн `day-analysis`. Подстраховка: cron `0 4 * * *` для дней с готовой детекцией без успешного анализа. Периодный отчёт — вручную из вкладки «Анализ» (`POST /api/projects/:id/analysis`).
+
 ## Python-пакеты
 
 ```
 pip install -e ".[detecting]"
 pip install -e ".[planning]"
+pip install -e ".[analysis]"
 pip install -e ".[calendar]"
 pip install -e ".[seed]"
 ```

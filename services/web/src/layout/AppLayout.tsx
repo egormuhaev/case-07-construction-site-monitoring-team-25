@@ -24,7 +24,7 @@ function readCompact() {
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { projectId = '', day = '', runId = '' } = useParams();
+  const { projectId = '', day = '', runId = '', findingId = '' } = useParams();
   const { theme, setTheme } = useAppTheme();
   const [compact, setCompact] = useState(readCompact);
 
@@ -76,7 +76,9 @@ export default function AppLayout() {
         id: 'analysis',
         title: 'Нарушения',
         icon: ChartColumn,
-        current: location.pathname.startsWith(`${base}/analysis`),
+        current:
+          location.pathname.startsWith(`${base}/analysis`) &&
+          !location.pathname.includes('/days/'),
         onItemClick: () => navigate(`${base}/analysis`),
       },
     ];
@@ -93,8 +95,6 @@ export default function AppLayout() {
       });
       if (location.pathname.includes('/plan')) {
         items.push({ text: 'План' });
-      } else if (location.pathname.includes('/analysis')) {
-        items.push({ text: 'Нарушения' });
       } else if (location.pathname.includes('/days')) {
         items.push({
           text: 'Дни',
@@ -109,14 +109,29 @@ export default function AppLayout() {
           });
         }
         if (runId) {
-          items.push({ text: 'Отчёт детекции' });
+          const isAnalysis = location.pathname.includes('/analysis/');
+          items.push({
+            text: isAnalysis ? 'Отчёт анализа' : 'Отчёт детекции',
+            action:
+              isAnalysis && findingId
+                ? () =>
+                    navigate(
+                      `/projects/${projectId}/days/${day}/analysis/${runId}`,
+                    )
+                : undefined,
+          });
+          if (findingId) {
+            items.push({ text: 'Сигнал' });
+          }
         }
+      } else if (location.pathname.includes('/analysis')) {
+        items.push({ text: 'Нарушения' });
       } else if (location.pathname === `/projects/${projectId}`) {
         items.push({ text: 'Карточка' });
       }
     }
     return items;
-  }, [day, location.pathname, navigate, project.data?.name, projectId, runId]);
+  }, [day, findingId, location.pathname, navigate, project.data?.name, projectId, runId]);
 
   return (
     <AsideHeader

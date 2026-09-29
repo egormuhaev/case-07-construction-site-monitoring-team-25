@@ -1,5 +1,6 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AnalysisModule } from '../analysis/analysis.module';
 import { WorkflowsModule } from '../workflows/workflows.module';
 import { DetectionController } from './detection.controller';
 import { DetectionScheduler } from './detection.scheduler';
@@ -23,6 +24,7 @@ import { DetectionFrame, DetectionObject, DetectionRun } from './entities/detect
 @Module({
   imports: [
     WorkflowsModule,
+    forwardRef(() => AnalysisModule),
     TypeOrmModule.forFeature([
       Project,
       ProjectPlan,

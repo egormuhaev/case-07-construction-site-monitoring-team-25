@@ -1,6 +1,7 @@
 services:
   db:
     image: pgvector/pgvector:pg16
+    platform: linux/amd64
     container_name: monitoring-db
     restart: unless-stopped
     environment:
@@ -8,7 +9,7 @@ services:
       POSTGRES_PASSWORD: admin_password
       POSTGRES_DB: monitoring_db
     ports:
-      - 5432:5432
+      - "12432:5432"
     volumes:
       - monitoring_db_data:/var/lib/postgresql/data
     healthcheck:

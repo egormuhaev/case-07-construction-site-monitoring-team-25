@@ -8,7 +8,7 @@ from sentence_transformers import SentenceTransformer
 def connect() -> psycopg.Connection:
     return psycopg.connect(
         host=os.environ.get("POSTGRES_HOST", "localhost"),
-        port=os.environ.get("POSTGRES_PORT", "5432"),
+        port=os.environ.get("POSTGRES_PORT", "12432"),
         user=os.environ.get("POSTGRES_USER", "admin"),
         password=os.environ.get("POSTGRES_PASSWORD", "admin_password"),
         dbname=os.environ.get("POSTGRES_DB", "monitoring_db"),

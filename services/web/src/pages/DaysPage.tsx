@@ -12,7 +12,14 @@ export default function DaysPage() {
   const { projectId = '' } = useParams();
   const navigate = useNavigate();
   const [day, setDay] = useState(new Date().toISOString().slice(0, 10));
-  const days = useQuery({ queryKey: ['days', projectId], queryFn: () => api.days(projectId) });
+  const days = useQuery({
+    queryKey: ['days', projectId],
+    queryFn: () => api.days(projectId),
+    refetchInterval: (query) => {
+      const rows = query.state.data ?? [];
+      return rows.some((row) => row.status === 'DETECTING') ? 4000 : false;
+    },
+  });
 
   const columns: TableColumnConfig<DayRow>[] = [
     {

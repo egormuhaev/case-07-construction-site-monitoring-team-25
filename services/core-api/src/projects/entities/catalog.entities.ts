@@ -1,4 +1,11 @@
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
+import {
+  Column,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryColumn,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 
 @Entity({ name: 'work' })
 export class PlanWork {
@@ -40,6 +47,9 @@ export class PlanWork {
 
   @Column({ name: 'finish_at', type: 'timestamp', nullable: true })
   finishAt: Date | null;
+
+  @Column({ name: 'duration_hours', type: 'float', nullable: true })
+  durationHours: number | null;
 }
 
 @Entity({ name: 'work_classifier' })
@@ -83,7 +93,10 @@ export class WorkClassifier {
 
 @Entity({ name: 'work_classifier_match' })
 export class WorkClassifierMatch {
-  @PrimaryColumn({ name: 'work_id', type: 'uuid' })
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column({ name: 'work_id', type: 'uuid' })
   workId: string;
 
   @Column({ name: 'classifier_id', type: 'uuid' })
@@ -97,6 +110,12 @@ export class WorkClassifierMatch {
 
   @Column({ name: 'rerank_score', type: 'float', nullable: true })
   rerankScore: number | null;
+
+  @Column({ type: 'float', nullable: true })
+  volume: number | null;
+
+  @Column({ name: 'duration_days', type: 'float', nullable: true })
+  durationDays: number | null;
 
   @ManyToOne(() => WorkClassifier)
   @JoinColumn({ name: 'classifier_id' })

@@ -12,3 +12,29 @@ body {
   margin: 0;
   background: var(--g-color-base-background);
 }
+
+
+@media print {
+  .no-print,
+  .g-aside-header,
+  .gn-aside-header,
+  nav,
+  [class*='AsideHeader'] {
+    display: none !important;
+  }
+
+  body {
+    background: white !important;
+  }
+
+  .analysis-report {
+    max-width: none !important;
+  }
+}
+
+.analysis-completeness-banner {
+  border: 1px solid var(--g-color-line-warning);
+  background: var(--g-color-base-warning-light);
+  border-radius: 8px;
+  padding: 12px 14px;
+}

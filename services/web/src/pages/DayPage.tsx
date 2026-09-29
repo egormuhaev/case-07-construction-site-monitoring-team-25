@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Picture, Play } from '@gravity-ui/icons';
@@ -17,7 +17,7 @@ import {
   TabProvider,
   Text,
 } from '@gravity-ui/uikit';
-import { api, type ProjectImage } from '../api';
+import { api, formatInTimeZone, type ProjectImage } from '../api';
 import { QueryState } from '../components/QueryState';
 import { StatusLabel } from '../components/StatusLabel';
 import { useMutationToast } from '../hooks/useMutationToast';
@@ -36,6 +36,15 @@ export default function DayPage() {
   const [preview, setPreview] = useState<ProjectImage | null>(null);
   const [tab, setTab] = useState('manual');
 
+  const [activeAnalysisRunId, setActiveAnalysisRunId] = useState<string | null>(null);
+
+  const project = useQuery({
+    queryKey: ['project', projectId],
+    queryFn: () => api.project(projectId),
+    enabled: Boolean(projectId),
+  });
+  const timezone = project.data?.timezone ?? 'Europe/Moscow';
+
   const details = useQuery({
     queryKey: ['day', projectId, day],
     queryFn: () => api.day(projectId, day),
@@ -53,6 +62,7 @@ export default function DayPage() {
       setUploadOpen(false);
       void queryClient.invalidateQueries({ queryKey: ['day', projectId, day] });
       void queryClient.invalidateQueries({ queryKey: ['days', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['day-analysis', projectId, day] });
       toast.success('Кадры сохранены');
     },
     onError: (error) => toast.error('Не удалось загрузить кадры', error),
@@ -70,10 +80,77 @@ export default function DayPage() {
     onError: (error) => toast.error('Не удалось запустить детекцию', error),
   });
 
+  const dayStatus = details.data?.status;
+  const completedAnalysis = useQuery({
+    queryKey: ['day-analysis', projectId, day],
+    queryFn: () => api.dayAnalysis(projectId, day),
+    enabled: Boolean(projectId && day),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (data?.status === 'RUNNING') return 3000;
+      if (dayStatus === 'DETECTED' && (!data?.id || data.status === 'RUNNING')) return 4000;
+      return false;
+    },
+  });
+
+  useEffect(() => {
+    if (completedAnalysis.data?.status === 'RUNNING' && completedAnalysis.data.id) {
+      setActiveAnalysisRunId(completedAnalysis.data.id);
+    }
+  }, [completedAnalysis.data?.id, completedAnalysis.data?.status]);
+
+  const activeAnalysis = useQuery({
+    queryKey: ['analysis-run', activeAnalysisRunId],
+    queryFn: () => api.analysisRun(activeAnalysisRunId!),
+    enabled: Boolean(activeAnalysisRunId),
+    refetchInterval: (query) => (query.state.data?.status === 'RUNNING' ? 3000 : false),
+  });
+
+  const startAnalysis = useMutation({
+    mutationFn: () => api.startDayAnalysis(projectId, day),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['day-analysis', projectId, day] });
+      if (result.reused) {
+        toast.success('Отчёт уже готов');
+        navigate(`/projects/${projectId}/days/${day}/analysis/${result.run.id}`);
+        return;
+      }
+      setActiveAnalysisRunId(result.run.id);
+      toast.success('Подготовка отчёта запущена');
+    },
+    onError: (error) => toast.error('Не удалось подготовить отчёт', error),
+  });
+
   const data = details.data;
   const images = data?.images ?? [];
   const manual = images.filter((image) => image.source === 'MANUAL');
   const automatic = images.filter((image) => image.source === 'API');
+  const analysisData =
+    activeAnalysis.data && activeAnalysis.data.status !== 'FAILED'
+      ? activeAnalysis.data
+      : completedAnalysis.data?.id
+        ? completedAnalysis.data
+        : undefined;
+  const completedDetection =
+    data?.latestRun?.status === 'COMPLETED' ? data.latestRun : null;
+  const reportReady = Boolean(completedAnalysis.data?.current && completedAnalysis.data.id);
+  const framesStale =
+    Boolean(completedDetection) &&
+    completedAnalysis.data?.current === false &&
+    completedAnalysis.data?.staleReason === 'набор кадров изменился после детекции';
+  const canPrepare =
+    Boolean(completedDetection) &&
+    !reportReady &&
+    !framesStale &&
+    !startAnalysis.isPending &&
+    analysisData?.status !== 'RUNNING';
+
+  useEffect(() => {
+    if (activeAnalysis.data?.status === 'COMPLETED') {
+      void queryClient.invalidateQueries({ queryKey: ['day-analysis', projectId, day] });
+      navigate(`/projects/${projectId}/days/${day}/analysis/${activeAnalysis.data.id}`);
+    }
+  }, [activeAnalysis.data?.status, activeAnalysis.data?.id, day, navigate, projectId, queryClient]);
 
   return (
     <Flex direction="column" gap={4}>
@@ -85,6 +162,12 @@ export default function DayPage() {
             <Flex alignItems="center" gap={2}>
               <Spin size="s" />
               <Text color="secondary">Идёт детекция…</Text>
+            </Flex>
+          )}
+          {analysisData?.status === 'RUNNING' && (
+            <Flex alignItems="center" gap={2}>
+              <Spin size="s" />
+              <Text color="secondary">Готовится отчёт…</Text>
             </Flex>
           )}
         </Flex>
@@ -101,6 +184,25 @@ export default function DayPage() {
             <Icon data={Play} />
             Запустить детекцию
           </Button>
+          {reportReady ? (
+            <Button
+              view="outlined"
+              onClick={() =>
+                navigate(`/projects/${projectId}/days/${day}/analysis/${completedAnalysis.data!.id}`)
+              }
+            >
+              Открыть отчёт анализа
+            </Button>
+          ) : (
+            <Button
+              view="outlined"
+              disabled={!canPrepare}
+              loading={startAnalysis.isPending || analysisData?.status === 'RUNNING'}
+              onClick={() => startAnalysis.mutate()}
+            >
+              Подготовить отчёт
+            </Button>
+          )}
         </Flex>
       </Flex>
 
@@ -115,11 +217,76 @@ export default function DayPage() {
               view="flat"
               href={`/projects/${projectId}/days/${day}/report/${data.latestRun.id}`}
             >
-              Открыть отчёт
+              Открыть отчёт детекции
             </Button>
           </Flex>
         </Card>
       )}
+
+      <Card view="outlined" className="p-4">
+        <Flex justifyContent="space-between" alignItems="center" wrap gap={3} className="mb-3">
+          <Text variant="subheader-2">Анализ дня</Text>
+          {analysisData?.observability && (
+            <StatusLabel kind="observability" status={analysisData.observability} />
+          )}
+        </Flex>
+        {!completedDetection && !completedAnalysis.isLoading && (
+          <Text color="secondary">Сначала завершите детекцию за день.</Text>
+        )}
+        {framesStale && (
+          <Text color="warning">
+            Набор кадров изменился после детекции. Повторите детекцию, затем подготовьте отчёт.
+          </Text>
+        )}
+        {completedDetection && !reportReady && !framesStale && !analysisData && (
+          <Text color="secondary">
+            Детекция готова. Отчёт часто стартует сам — можно подождать или нажать «Подготовить отчёт».
+          </Text>
+        )}
+        {(completedAnalysis.isLoading || activeAnalysis.isLoading) && !analysisData && (
+          <Spin size="s" />
+        )}
+        {analysisData && (
+          <Flex direction="column" gap={3}>
+            <Flex gap={4} wrap>
+              <Text color="secondary">
+                Статус: <StatusLabel kind="run" status={analysisData.status} />
+              </Text>
+              <Text color="secondary">
+                Сигналов:{' '}
+                {String(
+                  (analysisData.summary as { findingCount?: number })?.findingCount ??
+                    analysisData.findings?.length ??
+                    0,
+                )}
+              </Text>
+              {completedAnalysis.data?.current === false && completedAnalysis.data.staleReason && (
+                <Text color="warning">{completedAnalysis.data.staleReason}</Text>
+              )}
+            </Flex>
+            <div className="flex flex-wrap gap-2">
+              {(analysisData.classes ?? []).map((row) => (
+                <StatusLabel
+                  key={row.id}
+                  kind="verdict"
+                  status={row.verdict}
+                  extra={row.classTitle || row.classCode}
+                />
+              ))}
+            </div>
+            {analysisData.status === 'COMPLETED' && analysisData.id && (
+              <Button
+                view="flat-secondary"
+                onClick={() =>
+                  navigate(`/projects/${projectId}/days/${day}/analysis/${analysisData.id}`)
+                }
+              >
+                Открыть полный отчёт
+              </Button>
+            )}
+          </Flex>
+        )}
+      </Card>
 
       <QueryState
         isLoading={details.isLoading}
@@ -137,10 +304,10 @@ export default function DayPage() {
             </Tab>
           </TabList>
           <TabPanel value="manual">
-            <Gallery images={manual} onOpen={setPreview} />
+            <Gallery images={manual} timezone={timezone} onOpen={setPreview} />
           </TabPanel>
           <TabPanel value="api">
-            <Gallery images={automatic} onOpen={setPreview} />
+            <Gallery images={automatic} timezone={timezone} onOpen={setPreview} />
           </TabPanel>
         </TabProvider>
       </QueryState>
@@ -149,6 +316,9 @@ export default function DayPage() {
         <Dialog.Header caption="Загрузка кадров" />
         <Dialog.Body>
           <Flex direction="column" gap={3}>
+            <Text color="secondary">
+              Время указывается по часовому поясу стройки ({timezone}). По умолчанию — 12:00.
+            </Text>
             <input
               ref={fileRef}
               type="file"
@@ -234,7 +404,7 @@ export default function DayPage() {
               className="max-h-[80vh] w-full object-contain"
             />
             <Text color="secondary" className="mt-2 block">
-              {new Date(preview.capturedAt).toLocaleString('ru-RU')}
+              {formatInTimeZone(preview.capturedAt, timezone)}
             </Text>
           </div>
         )}
@@ -245,9 +415,11 @@ export default function DayPage() {
 
 function Gallery({
   images,
+  timezone,
   onOpen,
 }: {
   images: ProjectImage[];
+  timezone: string;
   onOpen: (image: ProjectImage) => void;
 }) {
   if (!images.length) {
@@ -274,7 +446,7 @@ function Gallery({
             className="h-36 w-full object-cover"
           />
           <div className="p-2 text-xs text-[var(--g-color-text-secondary)]">
-            {new Date(image.capturedAt).toLocaleString('ru-RU')}
+            {formatInTimeZone(image.capturedAt, timezone)}
           </div>
         </button>
       ))}

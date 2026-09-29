@@ -10,6 +10,7 @@ import { HealthController } from './health.controller';
 import { runSqlMigrations } from './database/run-migrations';
 import { StorageModule } from './storage/storage.module';
 import { ProjectsModule } from './projects/projects.module';
+import { AnalysisModule } from './analysis/analysis.module';
 import { Project } from './projects/entities/project.entity';
 import { ProjectPlan } from './projects/entities/project-plan.entity';
 import { ProjectDay } from './projects/entities/project-day.entity';
@@ -22,6 +23,11 @@ import {
   WorkClassifierMatch,
 } from './projects/entities/catalog.entities';
 import { DetectionFrame, DetectionObject, DetectionRun } from './projects/entities/detection.entities';
+import {
+  AnalysisDayClass,
+  AnalysisFinding,
+  AnalysisRun,
+} from './analysis/entities/analysis.entities';
 
 @Module({
   imports: [
@@ -53,6 +59,9 @@ import { DetectionFrame, DetectionObject, DetectionRun } from './projects/entiti
             DetectionRun,
             DetectionFrame,
             DetectionObject,
+            AnalysisRun,
+            AnalysisDayClass,
+            AnalysisFinding,
           ],
           synchronize: false,
         };
@@ -66,6 +75,7 @@ import { DetectionFrame, DetectionObject, DetectionRun } from './projects/entiti
     }),
     WorkflowsModule,
     ProjectsModule,
+    AnalysisModule,
   ],
   controllers: [HealthController],
 })

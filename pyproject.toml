@@ -41,6 +41,13 @@ planning = [
     "JPype1",
     "mpxj",
 ]
+analysis = [
+    "fastapi",
+    "uvicorn[standard]",
+    "redis",
+    "pydantic-settings",
+    "psycopg[binary]",
+]
 calendar = [
     "faiss-cpu",
     "ijson",
@@ -63,7 +70,7 @@ detecting = "detecting.main:main"
 
 [tool.setuptools.packages.find]
 where = ["services"]
-include = ["detecting*", "planning*"]
+include = ["detecting*", "planning*", "analysis*"]
 
 [tool.pyright]
 extraPaths = ["services"]

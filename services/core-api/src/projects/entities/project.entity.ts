@@ -26,6 +26,15 @@ export class Project {
   @Column({ type: 'text', nullable: true })
   address: string | null;
 
+  @Column({ name: 'object_type', type: 'text', nullable: true })
+  objectType: string | null;
+
+  @Column({ name: 'contract_number', type: 'text', nullable: true })
+  contractNumber: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  notes: string | null;
+
   @Column({ name: 'start_date', type: 'date', nullable: true })
   startDate: string | null;
 
@@ -34,6 +43,12 @@ export class Project {
 
   @Column({ default: 'Europe/Moscow' })
   timezone: string;
+
+  @Column({ name: 'shift_start', type: 'time', nullable: true })
+  shiftStart: string | null;
+
+  @Column({ name: 'shift_end', type: 'time', nullable: true })
+  shiftEnd: string | null;
 
   @Column({ name: 'ingest_token' })
   ingestToken: string;

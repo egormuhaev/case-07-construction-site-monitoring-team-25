@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -36,6 +37,11 @@ export class ProjectsController {
   @Patch('projects/:id')
   update(@Param('id') id: string, @Body() dto: UpdateProjectDto) {
     return this.projects.update(id, dto);
+  }
+
+  @Delete('projects/:id')
+  remove(@Param('id') id: string) {
+    return this.projects.remove(id);
   }
 
   @Post('projects/:id/ingest-token/rotate')
@@ -77,6 +83,12 @@ export class ProjectsController {
 
   @Patch('works/:workId/match')
   match(@Param('workId') workId: string, @Body() dto: PatchMatchDto) {
+    if (dto.assignments) {
+      return this.projects.replaceMatches(workId, dto.assignments);
+    }
+    if (!dto.classifierId) {
+      return this.projects.replaceMatches(workId, []);
+    }
     return this.projects.patchMatch(workId, dto.classifierId);
   }
 

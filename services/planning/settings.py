@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     cache_dir: Path = Path("/cache")
     log_level: str = "INFO"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    rerank_enabled: bool = True
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
     top_k: int = 50
 

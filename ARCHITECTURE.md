@@ -5,14 +5,13 @@
 
 ## 1. Обзор
 
-Система ведёт строительный **проект** от загрузки календарного плана до отчёта детекции по дням:
+Система ведёт строительный **проект** от загрузки календарного плана до отчёта детекции и анализа отклонений по дням:
 
 1. Создаётся проект (заказчик, адрес, таймзона, ingest-токен для камер).
 2. Загружается версия календарного плана (`.mpp` / `.xml`) → импорт и сопоставление работ с нормами ГЭСН.
 3. Кадры приходят с камер (ingest) или загружаются вручную и раскладываются по **дням**.
 4. По дню запускается детекция (вручную или ночным cron) → нормализованный отчёт с боксами в UI.
-
-**Осознанно не сделано:** сервис анализа нарушений. В UI есть вкладка-заглушка «В разработке»; отдельных таблиц и API под неё нет.
+5. После сохранения детекции автоматически стартует дневной анализ план/факт по группам техники; периодный отчёт — вручную.
 
 Стек по ролям:
 
@@ -22,6 +21,7 @@
 | Домен + оркестрация | NestJS 11 + TypeORM + BullMQ (`services/core-api`) |
 | Импорт плана | FastAPI + MPXJ/JPype + embeddings/rerank (`services/planning`) |
 | Детекция | FastAPI + YOLO / YOLO-World / DINOv2 (`services/detecting`) |
+| Анализ | FastAPI + SQL-агрегации план/факт (`services/analysis`) |
 | БД | одна Postgres `monitoring_db` с pgvector |
 | Очереди / кэш job-ов | Redis |
 | Файлы | общий том `./shared` → `/data` |
@@ -38,15 +38,18 @@ flowchart TB
   engine --> redis[("Redis: BullMQ + job store")]
   engine -->|"POST /jobs"| planning["services/planning"]
   engine -->|"POST /jobs"| detecting["services/detecting"]
+  engine -->|"POST /jobs"| analysis["services/analysis"]
   planning --> db
   planning --> shared
   detecting --> shared
   detecting --> redis
   planning --> redis
+  analysis --> db
+  analysis --> redis
 ```
 
 - **core-api** — единственная точка домена и HTTP для UI/камер. Workflow-движок внутри того же процесса, без HTTP между «доменом» и «оркестратором».
-- **planning** и **detecting** — асинхронные job-сервисы с одинаковым контрактом; planning ещё пишет в Postgres, detecting работает с файлами на `/data` и отдаёт JSON-результат.
+- **planning**, **detecting** и **analysis** — асинхронные job-сервисы с одинаковым контрактом; planning и analysis пишут в Postgres, detecting работает с файлами на `/data` и отдаёт JSON-результат.
 - **web** не ходит в Python-сервисы напрямую: nginx проксирует `/api` и `/health` в core-api.
 
 ## 3. Структура репозитория
@@ -77,14 +80,17 @@ Python-пакеты ищутся в `services/` (`detecting*`, `planning*`). С�
 
 Определения: [docker-compose.yml](docker-compose.yml), БД — [deploy/db/db.yml](deploy/db/db.yml). Подъём: `make up`.
 
-| Сервис | Порт | Healthcheck | Зависимости | Тома |
-| --- | --- | --- | --- | --- |
-| `db` | 5432 | `pg_isready` | — | `monitoring_db_data` |
-| `redis` | 6379 | `PING` | — | `redis-data` (AOF) |
-| `detecting` | 8000 | `GET /health` | redis | `./shared:/data`, weights, cache |
-| `planning` | 8001 | `GET /health` | db, redis | `./shared:/data`, cache |
-| `core-api` | 3000 | `GET /health` | db, redis, detecting, planning | `./shared:/data`, migrations `:ro` |
-| `web` | 8080→80 | nginx | core-api | — |
+| Сервис | Порт на хосте | Внутри сети | Healthcheck | Зависимости | Тома |
+| --- | --- | --- | --- | --- | --- |
+| `db` | **12432** | 5432 | `pg_isready` | — | `monitoring_db_data` |
+| `redis` | **12679** | 6379 | `PING` | — | `redis-data` (AOF) |
+| `detecting` | **12800** | 8000 | `GET /health` | redis | `./shared:/data`, weights, cache |
+| `planning` | **12801** | 8001 | `GET /health` | db, redis | `./shared:/data`, cache |
+| `analysis` | **12802** | 8002 | `GET /health` | db, redis | — |
+| `core-api` | **12300** | 3000 | `GET /health` | db, redis, detecting, planning, analysis | `./shared:/data`, migrations `:ro` |
+| `web` | **12080**→80 | 80 | nginx | core-api | — |
+
+Внешние порты в диапазоне **12xxx**, чтобы не пересекаться с другими проектами на машине. Внутри compose сервисы ходят друг к другу по внутренним портам.
 
 Внутренние URL пайплайнов (из [services/core-api/config/pipeline.json](services/core-api/config/pipeline.json)):
 
@@ -159,6 +165,10 @@ Python-пакеты ищутся в `services/` (`detecting*`, `planning*`). С�
 | --- | --- | --- |
 | `plan-import` | `classify-plan` | planning |
 | `day-detection` | `detect` | detecting |
+| `day-analysis` | `analyze` | analysis |
+| `period-analysis` | `analyze` | analysis |
+
+Дневной анализ стартует отдельным пайплайном **после** `WORKFLOW_COMPLETED` детекции (результаты уже в `detection_frame` / `detection_object`). Единица анализа — пара «день × `detection_class`».
 
 ### Состояние в БД (миграция 014)
 
@@ -416,7 +426,7 @@ erDiagram
 | `/projects/:id/days` | Таблица дней |
 | `/projects/:id/days/:day` | Галерея, загрузка, запуск детекции |
 | `/projects/:id/days/:day/report/:runId` | Отчёт: canvas с боксами поверх оригинала |
-| `/projects/:id/analysis` | Заглушка «В разработке» |
+| `/projects/:id/analysis` | Сводка, тепловая карта день×класс, сигналы |
 
 nginx ([nginx.conf](services/web/nginx.conf)) отдаёт SPA и проксирует `/api` → `core-api:3000`. Клиентский API-слой: [api.ts](services/web/src/api.ts).
 
@@ -448,12 +458,13 @@ make seed   # python scripts/seed.py
 | core-api | `PIPELINE_CONFIG_PATH`, `MIGRATIONS_DIR`, `DETECTION_CRON`, `DETECTION_TZ`, таймауты/lease dispatcher |
 | detecting | `DETECTING_*` (redis, data, weights, cache, port) |
 | planning | `PLANNING_*`, `PLANNING_NORMALIZE_ENABLED`, LLM URL/token/model |
+| analysis | `ANALYSIS_*` (postgres, redis, пороги покрытия и gap) |
 
 ## 14. Границы системы
 
 - **Нет пользовательской аутентификации** в UI/API. Доступ с камер — только `projectId` + `X-Ingest-Token`.
 - **Одна БД** на домен, оркестратор и каталоги классификаторов.
-- **Анализ нарушений** не реализован (только UI-заглушка).
+- **Анализ** работает на уровне групп техники (`detection_class`), не отдельных машин и не отдельных работ; СИЗ и зоны камер не моделируются.
 - **LLM-нормализация** плана выключена по умолчанию; включается env planning.
 - Job-сервисы не вызывают друг друга: только core-api через workflow-движок.
 
@@ -465,7 +476,9 @@ make seed   # python scripts/seed.py
 | Пайплайны | [services/core-api/config/pipeline.json](services/core-api/config/pipeline.json) |
 | Движок | [services/core-api/src/workflows/workflow-engine.service.ts](services/core-api/src/workflows/workflow-engine.service.ts) |
 | Домен | [services/core-api/src/projects/projects.service.ts](services/core-api/src/projects/projects.service.ts) |
-| Миграции 014–016 | [deploy/db/migrations](deploy/db/migrations) |
+| Анализ API | [services/core-api/src/analysis/analysis.service.ts](services/core-api/src/analysis/analysis.service.ts) |
+| Миграции 014–017 | [deploy/db/migrations](deploy/db/migrations) |
 | Planning | [services/planning/pipeline.py](services/planning/pipeline.py) |
+| Analysis | [services/analysis/pipeline.py](services/analysis/pipeline.py) |
 | Detecting runner | [services/detecting/api/runner.py](services/detecting/api/runner.py) |
 | Seed | [scripts/seed.py](scripts/seed.py) |

@@ -7,6 +7,8 @@ import DaysPage from './pages/DaysPage';
 import DayPage from './pages/DayPage';
 import ReportPage from './pages/ReportPage';
 import AnalysisPage from './pages/AnalysisPage';
+import AnalysisReportPage from './pages/AnalysisReportPage';
+import FindingDetailPage from './pages/FindingDetailPage';
 
 export default function App() {
   return (
@@ -20,6 +22,14 @@ export default function App() {
         <Route
           path="/projects/:projectId/days/:day/report/:runId"
           element={<ReportPage />}
+        />
+        <Route
+          path="/projects/:projectId/days/:day/analysis/:runId"
+          element={<AnalysisReportPage />}
+        />
+        <Route
+          path="/projects/:projectId/days/:day/analysis/:runId/findings/:findingId"
+          element={<FindingDetailPage />}
         />
         <Route path="/projects/:projectId/analysis" element={<AnalysisPage />} />
       </Route>

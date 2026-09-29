@@ -1,5 +1,4 @@
 import logging
-import os
 from contextlib import asynccontextmanager
 
 import redis
@@ -18,7 +17,6 @@ from .store import JobStore
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    os.environ.setdefault("HF_HOME", str(settings.cache_dir))
     logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
     client = redis.Redis(
         host=settings.redis_host,

@@ -1,4 +1,16 @@
-import { IsDateString, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsArray,
+  IsDateString,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+
+const TIME_HH_MM = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
 export class CreateProjectDto {
   @IsString()
@@ -18,6 +30,18 @@ export class CreateProjectDto {
   address?: string;
 
   @IsOptional()
+  @IsString()
+  objectType?: string;
+
+  @IsOptional()
+  @IsString()
+  contractNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @IsOptional()
   @IsDateString()
   startDate?: string;
 
@@ -28,6 +52,16 @@ export class CreateProjectDto {
   @IsOptional()
   @IsString()
   timezone?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(TIME_HH_MM, { message: 'shiftStart должен быть HH:MM' })
+  shiftStart?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @Matches(TIME_HH_MM, { message: 'shiftEnd должен быть HH:MM' })
+  shiftEnd?: string | null;
 }
 
 export class UpdateProjectDto {
@@ -49,6 +83,18 @@ export class UpdateProjectDto {
   address?: string | null;
 
   @IsOptional()
+  @IsString()
+  objectType?: string | null;
+
+  @IsOptional()
+  @IsString()
+  contractNumber?: string | null;
+
+  @IsOptional()
+  @IsString()
+  notes?: string | null;
+
+  @IsOptional()
   @IsDateString()
   startDate?: string | null;
 
@@ -59,9 +105,39 @@ export class UpdateProjectDto {
   @IsOptional()
   @IsString()
   timezone?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(TIME_HH_MM, { message: 'shiftStart должен быть HH:MM' })
+  shiftStart?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @Matches(TIME_HH_MM, { message: 'shiftEnd должен быть HH:MM' })
+  shiftEnd?: string | null;
+}
+
+export class MatchAssignmentDto {
+  @IsString()
+  classifierId: string;
+
+  @IsOptional()
+  @IsNumber()
+  volume?: number | null;
+
+  @IsOptional()
+  @IsNumber()
+  durationDays?: number | null;
 }
 
 export class PatchMatchDto {
+  @IsOptional()
   @IsString()
-  classifierId: string;
+  classifierId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MatchAssignmentDto)
+  assignments?: MatchAssignmentDto[];
 }

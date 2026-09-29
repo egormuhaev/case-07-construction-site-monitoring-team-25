@@ -72,9 +72,13 @@ def run_plan_import(
     )
     _checkpoint(on_stage, "retrieve", {"classifiers": len(classifiers), "top_k": settings.top_k})
 
-    reranker = CrossEncoder(settings.rerank_model)
-    matches = rerank(works, classifiers, indexes, bi_scores, reranker)
-    _checkpoint(on_stage, "rerank", {"matched": len(matches)})
+    if settings.rerank_enabled:
+        reranker = CrossEncoder(settings.rerank_model, cache_folder=str(settings.cache_dir))
+        matches = rerank(works, classifiers, indexes, bi_scores, reranker)
+        _checkpoint(on_stage, "rerank", {"matched": len(matches), "enabled": True})
+    else:
+        matches = matches_from_retrieve(works, classifiers, indexes, bi_scores)
+        _checkpoint(on_stage, "rerank", {"matched": len(matches), "enabled": False})
 
     persist(settings, plan_id, relative, works, names, embeddings, matches)
     _checkpoint(on_stage, "persist", {"planId": plan_id})
@@ -173,6 +177,36 @@ def rerank(
         current = best.get(work_index)
         if current is None or float(score) > current["rerank_score"]:
             best[work_index] = item
+    for work_index, items in ranked.items():
+        items.sort(key=lambda row: row["rerank_score"], reverse=True)
+        best.setdefault(work_index, {})["candidates"] = items[:50]
+    return [best[index] for index in range(len(works))]
+
+
+def matches_from_retrieve(
+    works: list[Work],
+    classifiers: list[dict],
+    indexes: np.ndarray,
+    bi_scores: np.ndarray,
+) -> list[dict]:
+    """Топ по bi-encoder без CrossEncoder: rerank_score = bi_score."""
+    best: dict[int, dict] = {}
+    ranked: dict[int, list[dict]] = {index: [] for index in range(len(works))}
+    for work_index, _work in enumerate(works):
+        for candidate_index, classifier_index in enumerate(indexes[work_index]):
+            if int(classifier_index) < 0:
+                continue
+            classifier = classifiers[int(classifier_index)]
+            score = float(bi_scores[work_index, candidate_index])
+            item = {
+                "classifier_id": classifier["classifier_id"],
+                "bi_score": score,
+                "rerank_score": score,
+            }
+            ranked[work_index].append(item)
+            current = best.get(work_index)
+            if current is None or score > current["rerank_score"]:
+                best[work_index] = item
     for work_index, items in ranked.items():
         items.sort(key=lambda row: row["rerank_score"], reverse=True)
         best.setdefault(work_index, {})["candidates"] = items[:50]
