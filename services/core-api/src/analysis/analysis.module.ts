@@ -5,7 +5,11 @@ import { Project } from '../projects/entities/project.entity';
 import { ProjectPlan } from '../projects/entities/project-plan.entity';
 import { ProjectDay } from '../projects/entities/project-day.entity';
 import { ProjectImage } from '../projects/entities/project-image.entity';
-import { DetectionFrame, DetectionRun } from '../projects/entities/detection.entities';
+import {
+  DetectionFrame,
+  DetectionObject,
+  DetectionRun,
+} from '../projects/entities/detection.entities';
 import { AnalysisController } from './analysis.controller';
 import { AnalysisScheduler } from './analysis.scheduler';
 import { AnalysisService } from './analysis.service';
@@ -28,6 +32,7 @@ import {
       ProjectImage,
       DetectionRun,
       DetectionFrame,
+      DetectionObject,
     ]),
   ],
   controllers: [AnalysisController],

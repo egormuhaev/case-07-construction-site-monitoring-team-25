@@ -1,10 +1,11 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Button,
   Card,
   Flex,
+  Modal,
   Table,
   Text,
   type TableColumnConfig,
@@ -17,7 +18,12 @@ import {
   verdictCopy,
   type CompletenessSummary,
 } from '../analysisCopy';
-import { api, type AnalysisDayClass, type AnalysisFinding } from '../api';
+import {
+  api,
+  type AnalysisDayClass,
+  type AnalysisDetection,
+  type AnalysisFinding,
+} from '../api';
 import { FindingActions } from '../components/FindingActions';
 import { QueryState } from '../components/QueryState';
 import { StatusLabel } from '../components/StatusLabel';
@@ -39,6 +45,40 @@ function workLabel(work: Record<string, unknown>) {
     return `${name} (${bits.join(' / ')})`;
   }
   return name;
+}
+
+function stageLabel(work: Record<string, unknown>): string | null {
+  const name = work.stageName ? String(work.stageName) : '';
+  if (!name) return null;
+  const wbs = work.stageWbs ? String(work.stageWbs) : '';
+  return wbs ? `${name} (${wbs})` : name;
+}
+
+function stagesFromWorks(works: Array<Record<string, unknown>>): string[] {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const work of works) {
+    const label = stageLabel(work);
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+  return labels;
+}
+
+function unmappedReasonLabel(reason: unknown): string {
+  switch (String(reason)) {
+    case 'NO_MATCH':
+      return 'нет сопоставления с классификатором';
+    case 'NO_MACHINE':
+      return 'нет машины в классификаторе';
+    case 'NO_DETECTION_LINK':
+      return 'нет класса детекции';
+    case 'UNKNOWN_CLASS':
+      return 'класс детекции неизвестен';
+    default:
+      return 'не удалось вывести технику';
+  }
 }
 
 function classExpectedDaily(row: AnalysisDayClass): string | null {
@@ -64,6 +104,7 @@ export default function AnalysisReportPage() {
   const navigate = useNavigate();
   const toast = useMutationToast();
   const queryClient = useQueryClient();
+  const [preview, setPreview] = useState<AnalysisDetection | null>(null);
 
   const project = useQuery({
     queryKey: ['project', projectId],
@@ -114,6 +155,23 @@ export default function AnalysisReportPage() {
   const missing = classes.filter((row) => row.expected && !row.present);
   const confirmed = classes.filter((row) => row.expected && row.present);
   const unexpected = classes.filter((row) => !row.expected && row.present && row.verdict === 'UNEXPECTED');
+
+  const activeStages = useMemo(() => {
+    const raw = summary.activeStages;
+    if (!Array.isArray(raw) || raw.length === 0) return [] as string[];
+    return raw.map((item) => {
+      const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      const name = String(row.stageName ?? 'Этап');
+      const wbs = row.stageWbs ? String(row.stageWbs) : '';
+      return wbs ? `${name} (${wbs})` : name;
+    });
+  }, [summary.activeStages]);
+
+  const unmappedWorks = useMemo(() => {
+    const raw = summary.unmappedWorks;
+    if (!Array.isArray(raw)) return [] as Array<Record<string, unknown>>;
+    return raw.filter((item) => item && typeof item === 'object') as Array<Record<string, unknown>>;
+  }, [summary.unmappedWorks]);
 
   const periodBars = useMemo(() => {
     const cells = heatmap.data?.cells ?? [];
@@ -203,6 +261,11 @@ export default function AnalysisReportPage() {
               <Text color="secondary">
                 Простыми словами: что по плану должно было работать и что видно на кадрах.
               </Text>
+              <Text color="secondary">
+                {activeStages.length > 0
+                  ? `Этап плана: ${activeStages.join('; ')}`
+                  : 'Этап плана не определён'}
+              </Text>
             </Flex>
             <Flex gap={2} alignItems="center" className="no-print">
               {data.observability && (
@@ -251,11 +314,41 @@ export default function AnalysisReportPage() {
             ) : (
               <Flex direction="column" gap={3}>
                 {missing.map((row) => (
-                  <EquipmentBlock key={row.id} row={row} titles={titles} />
+                  <EquipmentBlock key={row.id} row={row} titles={titles} missing />
                 ))}
               </Flex>
             )}
           </Card>
+
+          {unmappedWorks.length > 0 && (
+            <Card view="outlined" className="p-4">
+              <Text variant="subheader-2" className="mb-3 block">
+                Работы есть в плане, но технику вывести нельзя
+              </Text>
+              <Text color="secondary" className="mb-3 block">
+                Эти работы активны в день отчёта, но не связаны с классом детекции — в сверку техники они не попали.
+              </Text>
+              <Flex direction="column" gap={2}>
+                {unmappedWorks.map((work, index) => {
+                  const stage = stageLabel(work);
+                  return (
+                    <div
+                      key={String(work.workId ?? index)}
+                      className="rounded border border-[var(--g-color-line-generic)] p-3"
+                    >
+                      <Text variant="subheader-3">{String(work.name ?? 'Работа')}</Text>
+                      <Text color="secondary" className="mt-1 block">
+                        {[work.wbs ? `СДР ${work.wbs}` : null, stage ? `этап ${stage}` : null]
+                          .filter(Boolean)
+                          .join(' · ') || '—'}
+                      </Text>
+                      <Text className="mt-1 block">{unmappedReasonLabel(work.reason)}</Text>
+                    </div>
+                  );
+                })}
+              </Flex>
+            </Card>
+          )}
 
           <Card view="outlined" className="p-4">
             <Text variant="subheader-2" className="mb-3 block">
@@ -264,13 +357,13 @@ export default function AnalysisReportPage() {
             {confirmed.length === 0 ? (
               <Text color="secondary">Подтверждённых совпадений нет.</Text>
             ) : (
-              <Flex gap={2} wrap>
+              <Flex direction="column" gap={3}>
                 {confirmed.map((row) => (
-                  <StatusLabel
+                  <PresentEquipmentBlock
                     key={row.id}
-                    kind="verdict"
-                    status={row.verdict}
-                    extra={classDisplayName(row.classCode, titles, row.classTitle)}
+                    row={row}
+                    titles={titles}
+                    onOpen={setPreview}
                   />
                 ))}
               </Flex>
@@ -282,13 +375,13 @@ export default function AnalysisReportPage() {
               <Text variant="subheader-2" className="mb-3 block">
                 Увидели на кадрах вне плана
               </Text>
-              <Flex gap={2} wrap>
+              <Flex direction="column" gap={3}>
                 {unexpected.map((row) => (
-                  <StatusLabel
+                  <PresentEquipmentBlock
                     key={row.id}
-                    kind="verdict"
-                    status={row.verdict}
-                    extra={classDisplayName(row.classCode, titles, row.classTitle)}
+                    row={row}
+                    titles={titles}
+                    onOpen={setPreview}
                   />
                 ))}
               </Flex>
@@ -391,6 +484,10 @@ export default function AnalysisReportPage() {
               />
             </div>
           </details>
+
+          <Modal open={Boolean(preview)} onOpenChange={(open) => !open && setPreview(null)}>
+            {preview && <DetectionPreview detection={preview} />}
+          </Modal>
         </Flex>
       )}
     </QueryState>
@@ -400,12 +497,15 @@ export default function AnalysisReportPage() {
 function EquipmentBlock({
   row,
   titles,
+  missing = false,
 }: {
   row: AnalysisDayClass;
   titles: Record<string, string>;
+  missing?: boolean;
 }) {
   const works = row.expectedWorks ?? [];
   const daily = classExpectedDaily(row);
+  const stages = stagesFromWorks(works);
   return (
     <div className="rounded border border-[var(--g-color-line-generic)] p-3">
       <Flex justifyContent="space-between" alignItems="center" wrap gap={2}>
@@ -417,6 +517,14 @@ function EquipmentBlock({
       <Text color="secondary" className="mt-1 block">
         {verdictCopy(row.verdict).description}
       </Text>
+      {missing && (
+        <Text className="mt-1 block">На кадрах этой техники нет.</Text>
+      )}
+      {stages.length > 0 && (
+        <Text color="secondary" className="mt-1 block">
+          Этап: {stages.join('; ')}
+        </Text>
+      )}
       {daily && (
         <Text className="mt-1 block">По плану на день ~ {daily}</Text>
       )}
@@ -426,10 +534,153 @@ function EquipmentBlock({
             Связанные работы по плану:
           </Text>
           {works.map((work, index) => (
-            <Text key={String(work.workId ?? index)}>{workLabel(work)}</Text>
+            <Text key={String(work.workId ?? index)}>
+              {workLabel(work)}
+              {stageLabel(work) ? ` · ${stageLabel(work)}` : ''}
+            </Text>
           ))}
         </Flex>
       )}
+    </div>
+  );
+}
+
+function PresentEquipmentBlock({
+  row,
+  titles,
+  onOpen,
+}: {
+  row: AnalysisDayClass;
+  titles: Record<string, string>;
+  onOpen: (detection: AnalysisDetection) => void;
+}) {
+  const detections = row.detections ?? [];
+  const stages = stagesFromWorks(row.expectedWorks ?? []);
+  return (
+    <div className="rounded border border-[var(--g-color-line-generic)] p-3">
+      <Flex justifyContent="space-between" alignItems="center" wrap gap={2}>
+        <Text variant="subheader-3">
+          {classDisplayName(row.classCode, titles, row.classTitle)}
+        </Text>
+        <StatusLabel kind="verdict" status={row.verdict} />
+      </Flex>
+      <Text color="secondary" className="mt-1 block">
+        {row.frameCount} кадров · {row.objectCount} обнаружений
+      </Text>
+      {stages.length > 0 && (
+        <Text color="secondary" className="mt-1 block">
+          Этап: {stages.join('; ')}
+        </Text>
+      )}
+      {detections.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {detections.map((item) => (
+            <DetectionCrop key={item.objectId} detection={item} onOpen={onOpen} />
+          ))}
+        </div>
+      ) : (
+        <Text color="secondary" className="mt-2 block">
+          Картинок обнаружений нет — откройте отчёт детекции.
+        </Text>
+      )}
+    </div>
+  );
+}
+
+function DetectionCrop({
+  detection,
+  onOpen,
+}: {
+  detection: AnalysisDetection;
+  onOpen: (detection: AnalysisDetection) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const image = new window.Image();
+    image.onload = () => {
+      const boxW = Math.max(1, detection.x2 - detection.x1);
+      const boxH = Math.max(1, detection.y2 - detection.y1);
+      const pad = Math.max(8, Math.round(Math.max(boxW, boxH) * 0.08));
+      const sx = Math.max(0, detection.x1 - pad);
+      const sy = Math.max(0, detection.y1 - pad);
+      const sw = Math.min(image.width - sx, boxW + pad * 2);
+      const sh = Math.min(image.height - sy, boxH + pad * 2);
+      const maxSide = 120;
+      const scale = Math.min(1, maxSide / Math.max(sw, sh));
+      canvas.width = Math.max(1, Math.round(sw * scale));
+      canvas.height = Math.max(1, Math.round(sh * scale));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#e4572e';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(
+        (detection.x1 - sx) * scale,
+        (detection.y1 - sy) * scale,
+        boxW * scale,
+        boxH * scale,
+      );
+    };
+    image.src = api.imageFile(detection.imageId);
+  }, [detection]);
+
+  return (
+    <button
+      type="button"
+      className="overflow-hidden rounded border border-[var(--g-color-line-generic)] bg-[var(--g-color-base-generic)]"
+      onClick={() => onOpen(detection)}
+      title={`Уверенность ${(detection.confidence * 100).toFixed(0)}%`}
+    >
+      <canvas ref={canvasRef} className="block max-h-[120px] max-w-[120px]" />
+    </button>
+  );
+}
+
+function DetectionPreview({ detection }: { detection: AnalysisDetection }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
+    const image = new window.Image();
+    image.onload = () => {
+      const maxWidth = wrap.clientWidth || image.width;
+      const scale = Math.min(1, maxWidth / image.width);
+      canvas.width = Math.round(image.width * scale);
+      canvas.height = Math.round(image.height * scale);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#e4572e';
+      ctx.lineWidth = Math.max(2, 3 * scale);
+      ctx.strokeRect(
+        detection.x1 * scale,
+        detection.y1 * scale,
+        (detection.x2 - detection.x1) * scale,
+        (detection.y2 - detection.y1) * scale,
+      );
+    };
+    image.src = api.imageFile(detection.imageId);
+  }, [detection]);
+
+  return (
+    <div className="max-w-5xl p-4">
+      <div ref={wrapRef}>
+        <canvas ref={canvasRef} className="max-w-full" />
+      </div>
+      <Text color="secondary" className="mt-2 block">
+        Уверенность {(detection.confidence * 100).toFixed(0)}%
+        {detection.capturedAt
+          ? ` · ${new Date(detection.capturedAt).toLocaleString('ru-RU')}`
+          : ''}
+      </Text>
     </div>
   );
 }

@@ -1,4 +1,5 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
+import { extname } from 'node:path';
 import { Controller, Get, NotFoundException, Param, Res } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Response } from 'express';
@@ -6,6 +7,14 @@ import { Repository } from 'typeorm';
 import { StorageService } from '../storage/storage.service';
 import { DetectionFrame, DetectionObject, DetectionRun } from './entities/detection.entities';
 import { ProjectImage } from './entities/project-image.entity';
+
+function contentTypeForPath(path: string): string {
+  const ext = extname(path).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'image/jpeg';
+}
 
 @Controller()
 export class DetectionController {
@@ -55,7 +64,10 @@ export class DetectionController {
       throw new NotFoundException('изображение не найдено');
     }
     const abs = this.storage.resolveUnderRoot(image.relativePath);
-    res.setHeader('Content-Type', 'image/jpeg');
+    if (!existsSync(abs)) {
+      throw new NotFoundException('файл изображения не найден');
+    }
+    res.setHeader('Content-Type', contentTypeForPath(image.relativePath || abs));
     createReadStream(abs).pipe(res);
   }
 }

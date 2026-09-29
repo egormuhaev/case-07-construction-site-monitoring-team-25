@@ -434,22 +434,47 @@ function Gallery({
   return (
     <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
       {images.map((image) => (
-        <button
-          key={image.id}
-          type="button"
-          className="overflow-hidden rounded border border-[var(--g-color-line-generic)] text-left"
-          onClick={() => onOpen(image)}
-        >
-          <img
-            src={api.imageFile(image.id)}
-            alt={image.originalName ?? image.id}
-            className="h-36 w-full object-cover"
-          />
-          <div className="p-2 text-xs text-[var(--g-color-text-secondary)]">
-            {formatInTimeZone(image.capturedAt, timezone)}
-          </div>
-        </button>
+        <GalleryCard key={image.id} image={image} timezone={timezone} onOpen={onOpen} />
       ))}
     </div>
+  );
+}
+
+function GalleryCard({
+  image,
+  timezone,
+  onOpen,
+}: {
+  image: ProjectImage;
+  timezone: string;
+  onOpen: (image: ProjectImage) => void;
+}) {
+  const [broken, setBroken] = useState(false);
+  return (
+    <button
+      type="button"
+      className="overflow-hidden rounded border border-[var(--g-color-line-generic)] text-left"
+      onClick={() => onOpen(image)}
+    >
+      {broken ? (
+        <div className="flex h-36 w-full flex-col items-center justify-center gap-1 bg-[var(--g-color-base-generic)] px-2 text-center">
+          <Text variant="caption-2">{image.originalName ?? 'Кадр'}</Text>
+          <Text variant="caption-2" color="secondary">
+            Не удалось показать превью
+          </Text>
+        </div>
+      ) : (
+        <img
+          src={api.imageFile(image.id)}
+          alt={image.originalName ?? image.id}
+          className="h-36 w-full object-cover"
+          onError={() => setBroken(true)}
+        />
+      )}
+      <div className="p-2 text-xs text-[var(--g-color-text-secondary)]">
+        {formatInTimeZone(image.capturedAt, timezone)}
+        {image.originalName ? ` · ${image.originalName}` : ''}
+      </div>
+    </button>
   );
 }

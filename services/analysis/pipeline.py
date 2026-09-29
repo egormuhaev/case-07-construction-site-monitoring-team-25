@@ -66,6 +66,9 @@ class ExpectedWork:
     unit: str | None = None
     classifier_name: str | None = None
     duration_days: float | None = None
+    stage_name: str | None = None
+    stage_wbs: str | None = None
+    stage_unique_id: int | None = None
 
     @property
     def expected_daily(self) -> float | None:
@@ -74,6 +77,103 @@ class ExpectedWork:
         if self.duration_days <= 0:
             return None
         return float(self.volume) / float(self.duration_days)
+
+
+def expected_work_to_dict(work: ExpectedWork) -> dict[str, Any]:
+    return {
+        "workId": work.work_id,
+        "name": work.name,
+        "wbs": work.wbs,
+        "source": work.source,
+        "rerankScore": work.rerank_score,
+        "volume": work.volume,
+        "unit": work.unit,
+        "classifierName": work.classifier_name,
+        "durationDays": work.duration_days,
+        "expectedDaily": work.expected_daily,
+        "stageName": work.stage_name,
+        "stageWbs": work.stage_wbs,
+        "stageUniqueId": work.stage_unique_id,
+    }
+
+
+def load_work_stages(conn: Any, plan_id: str) -> dict[int, dict[str, Any]]:
+    """unique_id leaf → nearest summary ancestor (name, wbs, unique_id)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT unique_id, parent_unique_id, name, wbs, is_summary
+            FROM work
+            WHERE plan_id = %s
+            """,
+            (plan_id,),
+        )
+        rows = cur.fetchall()
+
+    by_uid: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        uid = int(row["unique_id"])
+        parent = row["parent_unique_id"]
+        by_uid[uid] = {
+            "parent_unique_id": int(parent) if parent is not None else None,
+            "name": str(row["name"]),
+            "wbs": row["wbs"],
+            "is_summary": bool(row["is_summary"]),
+        }
+
+    cache: dict[int, dict[str, Any] | None] = {}
+
+    def resolve(uid: int) -> dict[str, Any] | None:
+        if uid in cache:
+            return cache[uid]
+        node = by_uid.get(uid)
+        if not node:
+            cache[uid] = None
+            return None
+        parent_uid = node["parent_unique_id"]
+        visited: set[int] = set()
+        while parent_uid is not None and parent_uid not in visited:
+            visited.add(parent_uid)
+            parent = by_uid.get(parent_uid)
+            if not parent:
+                break
+            if parent["is_summary"]:
+                stage = {
+                    "stage_name": parent["name"],
+                    "stage_wbs": parent["wbs"],
+                    "stage_unique_id": parent_uid,
+                }
+                cache[uid] = stage
+                return stage
+            parent_uid = parent["parent_unique_id"]
+        cache[uid] = None
+        return None
+
+    result: dict[int, dict[str, Any]] = {}
+    for uid in by_uid:
+        stage = resolve(uid)
+        if stage:
+            result[uid] = stage
+    return result
+
+
+def collect_active_stages(works: Iterable[ExpectedWork]) -> list[dict[str, Any]]:
+    stages: dict[int, dict[str, Any]] = {}
+    for work in works:
+        if work.stage_unique_id is None:
+            continue
+        stages.setdefault(
+            work.stage_unique_id,
+            {
+                "stageUniqueId": work.stage_unique_id,
+                "stageName": work.stage_name,
+                "stageWbs": work.stage_wbs,
+            },
+        )
+    return sorted(
+        stages.values(),
+        key=lambda row: (str(row.get("stageWbs") or ""), str(row.get("stageName") or "")),
+    )
 
 
 @dataclass
@@ -323,6 +423,8 @@ def run_day_analysis(
         "findingCount": len(findings),
         "outsideProjectRange": is_outside_project_range(conn, payload.projectId, day),
         "completeness": completeness,
+        "activeStages": expectation.get("active_stages") or [],
+        "unmappedWorks": expectation.get("unmapped_works") or [],
     }
 
     persist_day_result(
@@ -676,7 +778,11 @@ def compute_expectation(
             "works_without_machine": 0,
             "works_without_detection_link": 0,
             "by_class": {},
+            "active_stages": [],
+            "unmapped_works": [],
         }
+
+    stages_by_uid = load_work_stages(conn, plan_id)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -770,6 +876,7 @@ def compute_expectation(
             """
             SELECT dcm.class_code,
                    w.id AS work_id,
+                   w.unique_id,
                    w.name,
                    w.wbs,
                    m.source,
@@ -795,21 +902,133 @@ def compute_expectation(
         )
         rows = cur.fetchall()
 
+        # Active leaf works that did not produce a usable detection class.
+        cur.execute(
+            """
+            SELECT w.id AS work_id,
+                   w.unique_id,
+                   w.name,
+                   w.wbs,
+                   CASE
+                     WHEN NOT EXISTS (
+                         SELECT 1 FROM work_classifier_match m WHERE m.work_id = w.id
+                     ) THEN 'NO_MATCH'
+                     WHEN EXISTS (
+                         SELECT 1
+                         FROM work_classifier_match m
+                         JOIN work_classifier c ON c.id = m.classifier_id
+                         WHERE m.work_id = w.id AND c.machine_id IS NULL
+                     ) AND NOT EXISTS (
+                         SELECT 1
+                         FROM work_classifier_match m
+                         JOIN work_classifier c ON c.id = m.classifier_id
+                         WHERE m.work_id = w.id AND c.machine_id IS NOT NULL
+                     ) THEN 'NO_MACHINE'
+                     WHEN EXISTS (
+                         SELECT 1
+                         FROM work_classifier_match m
+                         JOIN work_classifier c ON c.id = m.classifier_id
+                         JOIN detection_class_machine dcm ON dcm.machine_id = c.machine_id
+                         WHERE m.work_id = w.id AND dcm.class_code = %s
+                     ) AND NOT EXISTS (
+                         SELECT 1
+                         FROM work_classifier_match m
+                         JOIN work_classifier c ON c.id = m.classifier_id
+                         JOIN detection_class_machine dcm ON dcm.machine_id = c.machine_id
+                         WHERE m.work_id = w.id AND dcm.class_code <> %s
+                     ) THEN 'UNKNOWN_CLASS'
+                     WHEN EXISTS (
+                         SELECT 1
+                         FROM work_classifier_match m
+                         JOIN work_classifier c ON c.id = m.classifier_id
+                         WHERE m.work_id = w.id AND c.machine_id IS NOT NULL
+                     ) AND NOT EXISTS (
+                         SELECT 1
+                         FROM work_classifier_match m
+                         JOIN work_classifier c ON c.id = m.classifier_id
+                         JOIN detection_class_machine dcm ON dcm.machine_id = c.machine_id
+                         WHERE m.work_id = w.id
+                     ) THEN 'NO_DETECTION_LINK'
+                     ELSE NULL
+                   END AS reason
+            FROM work w
+            WHERE w.plan_id = %s
+              AND NOT w.is_summary
+              AND NOT w.is_milestone
+              AND w.start_at IS NOT NULL
+              AND w.finish_at IS NOT NULL
+              AND w.start_at::date <= %s
+              AND w.finish_at::date >= %s
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM work_classifier_match m
+                  JOIN work_classifier c ON c.id = m.classifier_id
+                  JOIN detection_class_machine dcm ON dcm.machine_id = c.machine_id
+                  WHERE m.work_id = w.id
+                    AND dcm.class_code <> %s
+              )
+            ORDER BY w.wbs NULLS LAST, w.name
+            """,
+            (UNKNOWN_CODE, UNKNOWN_CODE, plan_id, day, day, UNKNOWN_CODE),
+        )
+        unmapped_rows = cur.fetchall()
+
     by_class: dict[str, ClassExpectation] = {}
+    mapped_works: list[ExpectedWork] = []
     for row in rows:
         code = str(row["class_code"])
         bucket = by_class.setdefault(code, ClassExpectation(class_code=code))
-        bucket.works.append(
+        stage = stages_by_uid.get(int(row["unique_id"])) or {}
+        work = ExpectedWork(
+            work_id=str(row["work_id"]),
+            name=str(row["name"]),
+            wbs=row["wbs"],
+            source=str(row["source"]),
+            rerank_score=float(row["rerank_score"]) if row["rerank_score"] is not None else None,
+            volume=float(row["volume"]) if row["volume"] is not None else None,
+            unit=str(row["unit"]) if row["unit"] is not None else None,
+            classifier_name=str(row["classifier_name"]) if row["classifier_name"] is not None else None,
+            duration_days=float(row["duration_days"]) if row["duration_days"] is not None else None,
+            stage_name=stage.get("stage_name"),
+            stage_wbs=stage.get("stage_wbs"),
+            stage_unique_id=stage.get("stage_unique_id"),
+        )
+        bucket.works.append(work)
+        mapped_works.append(work)
+
+    unmapped_works: list[dict[str, Any]] = []
+    for row in unmapped_rows:
+        reason = row["reason"]
+        if not reason:
+            continue
+        stage = stages_by_uid.get(int(row["unique_id"])) or {}
+        unmapped_works.append(
+            {
+                "workId": str(row["work_id"]),
+                "name": str(row["name"]),
+                "wbs": row["wbs"],
+                "stageName": stage.get("stage_name"),
+                "stageWbs": stage.get("stage_wbs"),
+                "stageUniqueId": stage.get("stage_unique_id"),
+                "reason": reason,
+            }
+        )
+
+    # Stages from both mapped and unmapped active works.
+    stage_seed: list[ExpectedWork] = list(mapped_works)
+    for item in unmapped_works:
+        if item.get("stageUniqueId") is None:
+            continue
+        stage_seed.append(
             ExpectedWork(
-                work_id=str(row["work_id"]),
-                name=str(row["name"]),
-                wbs=row["wbs"],
-                source=str(row["source"]),
-                rerank_score=float(row["rerank_score"]) if row["rerank_score"] is not None else None,
-                volume=float(row["volume"]) if row["volume"] is not None else None,
-                unit=str(row["unit"]) if row["unit"] is not None else None,
-                classifier_name=str(row["classifier_name"]) if row["classifier_name"] is not None else None,
-                duration_days=float(row["duration_days"]) if row["duration_days"] is not None else None,
+                work_id=item["workId"],
+                name=item["name"],
+                wbs=item.get("wbs"),
+                source="AUTO",
+                rerank_score=None,
+                stage_name=item.get("stageName"),
+                stage_wbs=item.get("stageWbs"),
+                stage_unique_id=item.get("stageUniqueId"),
             )
         )
 
@@ -821,6 +1040,8 @@ def compute_expectation(
         "works_without_machine": works_without_machine,
         "works_without_detection_link": works_without_detection_link,
         "by_class": by_class,
+        "active_stages": collect_active_stages(stage_seed),
+        "unmapped_works": unmapped_works,
     }
 
 
@@ -841,18 +1062,7 @@ def reconcile_day(
         expected = expected_info is not None
         present = stats.present
         expected_works = [
-            {
-                "workId": work.work_id,
-                "name": work.name,
-                "wbs": work.wbs,
-                "source": work.source,
-                "rerankScore": work.rerank_score,
-                "volume": work.volume,
-                "unit": work.unit,
-                "classifierName": work.classifier_name,
-                "durationDays": work.duration_days,
-                "expectedDaily": work.expected_daily,
-            }
+            expected_work_to_dict(work)
             for work in (expected_info.works if expected_info else [])
         ]
         expected_confidence = expected_info.expected_confidence if expected_info else None

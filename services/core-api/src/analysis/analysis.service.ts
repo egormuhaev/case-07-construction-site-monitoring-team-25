@@ -11,7 +11,11 @@ import { Project } from '../projects/entities/project.entity';
 import { ProjectPlan } from '../projects/entities/project-plan.entity';
 import { ProjectDay } from '../projects/entities/project-day.entity';
 import { ProjectImage } from '../projects/entities/project-image.entity';
-import { DetectionFrame, DetectionRun } from '../projects/entities/detection.entities';
+import {
+  DetectionFrame,
+  DetectionObject,
+  DetectionRun,
+} from '../projects/entities/detection.entities';
 import {
   AnalysisDayClass,
   AnalysisFinding,
@@ -19,6 +23,19 @@ import {
   AnalysisTrigger,
   FindingStatus,
 } from './entities/analysis.entities';
+
+export type AnalysisDetectionEvidence = {
+  objectId: string;
+  frameId: string;
+  imageId: string;
+  classCode: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  capturedAt: Date | null;
+  confidence: number;
+};
 
 @Injectable()
 export class AnalysisService {
@@ -34,6 +51,7 @@ export class AnalysisService {
     @InjectRepository(ProjectImage) private readonly images: Repository<ProjectImage>,
     @InjectRepository(DetectionRun) private readonly detectionRuns: Repository<DetectionRun>,
     @InjectRepository(DetectionFrame) private readonly frames: Repository<DetectionFrame>,
+    @InjectRepository(DetectionObject) private readonly objects: Repository<DetectionObject>,
     private readonly engine: WorkflowEngineService,
   ) {}
 
@@ -302,15 +320,82 @@ export class AnalysisService {
         )
       : [];
     const classTitles = Object.fromEntries(titleRows.map((row) => [row.code, row.title]));
+    const detectionsByClass = await this.loadDetectionsByClass(run.detectionRunId);
     return {
       ...run,
       classTitles,
       classes: classes.map((row) => ({
         ...row,
         classTitle: classTitles[row.classCode] ?? row.classCode,
+        detections: detectionsByClass.get(row.classCode) ?? [],
       })),
       findings,
     };
+  }
+
+  private async loadDetectionsByClass(
+    detectionRunId: string | null,
+  ): Promise<Map<string, AnalysisDetectionEvidence[]>> {
+    const byClass = new Map<string, AnalysisDetectionEvidence[]>();
+    if (!detectionRunId) {
+      return byClass;
+    }
+
+    const rows: Array<{
+      object_id: string;
+      frame_id: string;
+      image_id: string;
+      class_code: string;
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      captured_at: Date | null;
+      detection_confidence: number;
+      classification_confidence: number | null;
+    }> = await this.objects.manager.query(
+      `
+      SELECT o.id AS object_id,
+             f.id AS frame_id,
+             f.image_id,
+             o.class_code,
+             o.x1,
+             o.y1,
+             o.x2,
+             o.y2,
+             f.captured_at,
+             o.detection_confidence,
+             o.classification_confidence
+      FROM detection_object o
+      JOIN detection_frame f ON f.id = o.frame_id
+      WHERE f.run_id = $1
+      ORDER BY o.class_code ASC, f.captured_at ASC NULLS LAST, o.id ASC
+      `,
+      [detectionRunId],
+    );
+
+    for (const row of rows) {
+      const code = String(row.class_code);
+      const list = byClass.get(code) ?? [];
+      const confidence =
+        row.classification_confidence != null
+          ? Number(row.classification_confidence)
+          : Number(row.detection_confidence);
+      list.push({
+        objectId: String(row.object_id),
+        frameId: String(row.frame_id),
+        imageId: String(row.image_id),
+        classCode: code,
+        x1: Number(row.x1),
+        y1: Number(row.y1),
+        x2: Number(row.x2),
+        y2: Number(row.y2),
+        capturedAt: row.captured_at,
+        confidence,
+      });
+      byClass.set(code, list);
+    }
+    return byClass;
   }
 
   async listFindings(

@@ -538,6 +538,30 @@ export class ProjectsService {
       checksum,
     });
     if (existing) {
+      let changed = false;
+      if (existing.dayId !== input.day.id) {
+        existing.dayId = input.day.id;
+        changed = true;
+      }
+      if (existing.source !== input.source) {
+        existing.source = input.source;
+        changed = true;
+      }
+      if (existing.capturedAt.getTime() !== input.capturedAt.getTime()) {
+        existing.capturedAt = input.capturedAt;
+        changed = true;
+      }
+      if (
+        input.cameraExternalId != null &&
+        existing.cameraExternalId !== input.cameraExternalId
+      ) {
+        existing.cameraExternalId = input.cameraExternalId;
+        changed = true;
+      }
+      if (changed) {
+        existing.receivedAt = new Date();
+        return this.images.save(existing);
+      }
       return existing;
     }
     const image = this.images.create({

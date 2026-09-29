@@ -158,6 +158,19 @@ export type DayAnalysisStartResult = {
   workflowId: string | null;
 };
 
+export type AnalysisDetection = {
+  objectId: string;
+  frameId: string;
+  imageId: string;
+  classCode: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  capturedAt: string | null;
+  confidence: number;
+};
+
 export type AnalysisDayClass = {
   id: string;
   runId: string;
@@ -177,6 +190,7 @@ export type AnalysisDayClass = {
   medianConfidence: number | null;
   needsRefinementRatio: number | null;
   verdict: 'CONFIRMED' | 'GAP' | 'UNEXPECTED' | 'NOT_EXPECTED' | 'INSUFFICIENT_DATA';
+  detections?: AnalysisDetection[];
 };
 
 export type AnalysisFinding = {

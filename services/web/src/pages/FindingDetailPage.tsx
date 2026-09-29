@@ -51,10 +51,14 @@ function ExpectedWorksList({ works }: { works: unknown }) {
           row.expectedDaily != null && row.expectedDaily !== ''
             ? ` · на день ~ ${formatScalar(row.expectedDaily)}${row.unit ? ` ${row.unit}` : ''}`
             : '';
+        const stage = row.stageName
+          ? ` · этап ${formatScalar(row.stageName)}${row.stageWbs ? ` (${row.stageWbs})` : ''}`
+          : '';
         return (
           <Text key={String(row.workId ?? index)}>
             {name}
             {wbs}
+            {stage}
             {volume}
             {duration}
             {daily}
