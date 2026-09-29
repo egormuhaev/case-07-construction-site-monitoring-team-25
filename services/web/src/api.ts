@@ -228,6 +228,18 @@ export type AnalysisFindingDetail = {
   };
 };
 
+export type FindingStatusCounts = {
+  POTENTIAL: number;
+  CONFIRMED: number;
+  DISMISSED: number;
+};
+
+export type FindingsStats = {
+  total: number;
+  byStatus: FindingStatusCounts;
+  byType: Record<string, FindingStatusCounts>;
+};
+
 export type AnalysisHeatmap = {
   days: Array<{
     day: string | null;
@@ -366,6 +378,10 @@ export const api = {
     }
     const suffix = params.toString() ? `?${params}` : '';
     return request<AnalysisFinding[]>(`/api/projects/${id}/findings${suffix}`);
+  },
+  findingsStats: (id: string, from: string, to: string) => {
+    const params = new URLSearchParams({ from, to });
+    return request<FindingsStats>(`/api/projects/${id}/findings/stats?${params}`);
   },
   finding: (findingId: string) =>
     request<AnalysisFindingDetail>(`/api/findings/${findingId}`),

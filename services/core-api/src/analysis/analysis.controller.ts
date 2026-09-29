@@ -50,6 +50,15 @@ export class AnalysisController {
     return this.analysis.getRun(runId);
   }
 
+  @Get('projects/:id/findings/stats')
+  findingsStats(
+    @Param('id') id: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.analysis.listFindingsStats(id, { from, to });
+  }
+
   @Get('projects/:id/findings')
   findings(
     @Param('id') id: string,
